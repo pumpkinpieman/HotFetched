@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>HotFetched</Name>
+  <Repository>ghcr.io/pumpkinpieman/hotfetched:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>3D printer firmware configuration and build workshop. Marlin (PlatformIO compile) and Klipper (MCU firmware + printer.cfg generation) with per-board validation and confidence-gated builds.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8090]/</WebUI>
+  <Icon/>
+  <Config Name="WebUI Port" Target="80" Default="8090" Mode="tcp" Description="HTTP port" Type="Port" Display="always" Required="true" Mask="false">8090</Config>
+  <Config Name="Private data" Target="/var/www/html/private" Default="/mnt/cache/appdata/hotfetched/private" Mode="rw" Description="SQLite DB, project sources, build artifacts. Keep on cache-only storage (NOT array/user-share) — same SQLite locking rule as FarFetched." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/hotfetched/private</Config>
+  <Config Name="PlatformIO cache" Target="/opt/platformio" Default="/mnt/cache/appdata/hotfetched/platformio" Mode="rw" Description="Persists the STM32 toolchain (~1-2 GB) so it is not re-downloaded on container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/hotfetched/platformio</Config>
+</Container>

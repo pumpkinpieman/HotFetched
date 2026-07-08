@@ -1,0 +1,13 @@
+# Runtime data — never commit
+private/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Secrets
+.env
+config.php
+
+# Logs / OS noise
+*.log
+.DS_Store

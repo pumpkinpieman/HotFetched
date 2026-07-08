@@ -1,0 +1,36 @@
+{
+  "id": "btt_skr_v3_0",
+  "name": "BigTreeTech SKR 3",
+  "vendor": "BigTreeTech",
+  "mcu_variants": [
+    { "id": "STM32H743VI", "label": "STM32H743VIT6 (480 MHz, 2 MB flash)", "marlin_env": "STM32H743VI_btt", "klipper_mcu": "stm32h743xx" },
+    { "id": "STM32H723VG", "label": "STM32H723VGT6 (550 MHz, 1 MB flash)", "marlin_env": "STM32H723VG_btt", "klipper_mcu": "stm32h723xx" }
+  ],
+  "marlin": {
+    "motherboard": "BOARD_BTT_SKR_V3_0",
+    "serial_ports": [1, -1],
+    "driver_slots": ["X", "Y", "Z", "E0", "E1"],
+    "valid_drivers": ["TMC2209", "TMC2208", "TMC2130", "TMC5160", "A4988", "DRV8825", "LV8729"],
+    "onboard_uart_drivers": true,
+    "max_extruders": 2
+  },
+  "klipper": {
+    "reference_config": "generic-bigtreetech-skr-3.cfg",
+    "kconfig": {
+      "MACH_STM32": true,
+      "FLASH_APPLICATION_ADDRESS": "0x8020000",
+      "STM32_CLOCK_REF_25M": true,
+      "USBSERIAL": true
+    },
+    "flash_note": "Copy klipper.bin to SD as firmware.bin (128KiB bootloader offset)."
+  },
+  "limits": {
+    "max_bed_x": 500,
+    "max_bed_y": 500,
+    "max_z": 600,
+    "max_hotend_temp": 350,
+    "max_bed_temp": 130,
+    "max_feedrate_xy": 500,
+    "max_feedrate_z": 20
+  }
+}
