@@ -37,6 +37,8 @@ function worker_fail(int $id, string $msg): never
 
 $sourceDir = project_source_dir($projectId);
 source_dir_reset($projectId);
+$fetchLog = project_fetch_log($projectId);
+@unlink($fetchLog);
 
 /* ------------------------------------------------------------ Acquire */
 
@@ -58,14 +60,21 @@ if ($project['source_type'] === 'github') {
     }
 
     $branchArg = $ref !== '' ? '--branch ' . escapeshellarg($ref) . ' ' : '';
+    // --progress forces percent/size reporting even without a tty; stderr
+    // streams to the fetch log, which api/source.php parses for the UI bar.
     $cmd = 'timeout ' . HF_CLONE_TIMEOUT_S
-         . ' git -c protocol.file.allow=never clone --depth 1 --single-branch '
+         . ' git -c protocol.file.allow=never clone --progress --depth 1 --single-branch '
          . $branchArg
-         . escapeshellarg($url) . ' ' . escapeshellarg($sourceDir) . ' 2>&1';
+         . escapeshellarg($url) . ' ' . escapeshellarg($sourceDir)
+         . ' > /dev/null 2> ' . escapeshellarg($fetchLog);
 
-    $out = shell_exec($cmd) ?? '';
+    shell_exec($cmd);
     if (!is_dir($sourceDir . '/.git')) {
-        $tail = trim(substr($out, -400));
+        $tail = '';
+        if (is_file($fetchLog)) {
+            $raw  = (string)@file_get_contents($fetchLog);
+            $tail = trim(substr($raw, -400));
+        }
         worker_fail($projectId, 'git clone failed: ' . ($tail !== '' ? $tail : 'unknown error (timeout?)'));
     }
 
@@ -75,7 +84,10 @@ if ($project['source_type'] === 'github') {
     if (!is_file($zipPath)) {
         worker_fail($projectId, 'Uploaded ZIP not found');
     }
-    $err = safe_zip_extract($zipPath, $sourceDir);
+    $err = safe_zip_extract($zipPath, $sourceDir, function (int $done, int $total) use ($fetchLog): void {
+        $pct = $total > 0 ? (int)floor($done * 100 / $total) : 0;
+        @file_put_contents($fetchLog, "Extracting: {$pct}% ({$done}/{$total})\n", FILE_APPEND);
+    });
     @unlink($zipPath);
     if ($err !== null) {
         worker_fail($projectId, $err);
@@ -99,4 +111,5 @@ $stmt = db()->prepare(
      WHERE id = ?"
 );
 $stmt->execute([json_encode($detected, JSON_UNESCAPED_SLASHES), $projectId]);
+@unlink($fetchLog);
 exit(0);

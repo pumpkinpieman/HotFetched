@@ -27,6 +27,51 @@ csrf_verify(is_string($body['csrf'] ?? null) ? $body['csrf'] : null);
 
 $action = (string)($body['action'] ?? '');
 
+/**
+ * Parse the tail of the worker's fetch log into overall progress.
+ * git phases map to: receiving 0-85, resolving deltas 85-95, updating files 95-100.
+ * ZIP extraction maps its own percent straight through.
+ * Returns ['pct' => int, 'mb' => ?float, 'phase' => string] or null.
+ */
+function fetch_progress(int $projectId): ?array
+{
+    $log = project_fetch_log($projectId);
+    if (!is_file($log)) {
+        return null;
+    }
+    $size = filesize($log) ?: 0;
+    $fh = @fopen($log, 'rb');
+    if ($fh === false) {
+        return null;
+    }
+    if ($size > 8192) {
+        fseek($fh, -8192, SEEK_END);
+    }
+    $tail = (string)stream_get_contents($fh);
+    fclose($fh);
+
+    // git progress uses \r for in-place updates — treat both as line breaks.
+    $lines = preg_split('/[\r\n]+/', $tail, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+    $best = null;
+    foreach ($lines as $line) {
+        if (preg_match('/Receiving objects:\s+(\d+)%(?:.*?([\d.]+)\s+(KiB|MiB|GiB))?/', $line, $m)) {
+            $mb = null;
+            if (isset($m[2], $m[3]) && $m[2] !== '') {
+                $mb = (float)$m[2] * match ($m[3]) { 'KiB' => 1 / 1024, 'MiB' => 1.0, 'GiB' => 1024.0 };
+            }
+            $best = ['pct' => (int)floor((int)$m[1] * 0.85), 'mb' => $mb, 'phase' => 'Downloading'];
+        } elseif (preg_match('/Resolving deltas:\s+(\d+)%/', $line, $m)) {
+            $best = ['pct' => 85 + (int)floor((int)$m[1] * 0.10), 'mb' => $best['mb'] ?? null, 'phase' => 'Resolving deltas'];
+        } elseif (preg_match('/Updating files:\s+(\d+)%/', $line, $m)) {
+            $best = ['pct' => 95 + (int)floor((int)$m[1] * 0.05), 'mb' => $best['mb'] ?? null, 'phase' => 'Writing files'];
+        } elseif (preg_match('/Extracting:\s+(\d+)%\s+\((\d+)\/(\d+)\)/', $line, $m)) {
+            $best = ['pct' => (int)$m[1], 'mb' => null, 'phase' => 'Extracting'];
+        }
+    }
+    return $best;
+}
+
 /** Shared: load + validate project, reject if a fetch is already running. */
 function load_project_for(array $body, bool $blockWhileFetching = true): array
 {
@@ -118,12 +163,13 @@ switch ($action) {
     case 'status': {
         $p = load_project_for($body, false);
         json_out([
-            'ok'     => true,
-            'state'  => $p['source_state'],
-            'ref'    => $p['source_ref'],
-            'type'   => $p['source_type'],
-            'error'  => $p['source_error'],
-            'detect' => $p['source_detect'] !== null ? json_decode($p['source_detect'], true) : null,
+            'ok'       => true,
+            'state'    => $p['source_state'],
+            'ref'      => $p['source_ref'],
+            'type'     => $p['source_type'],
+            'error'    => $p['source_error'],
+            'detect'   => $p['source_detect'] !== null ? json_decode($p['source_detect'], true) : null,
+            'progress' => $p['source_state'] === 'fetching' ? fetch_progress((int)$p['id']) : null,
         ]);
     }
 

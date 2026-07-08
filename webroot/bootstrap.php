@@ -297,6 +297,11 @@ function project_upload_zip(int $id): string
     return project_dir($id) . '/upload.zip';
 }
 
+function project_fetch_log(int $id): string
+{
+    return project_dir($id) . '/fetch.log';
+}
+
 /**
  * Detached worker launch (FarFetched pattern) — never blocks the request.
  */
@@ -317,7 +322,7 @@ function source_worker_launch(int $projectId): void
  * Extract a ZIP with zip-slip, entry-count and uncompressed-size guards.
  * Returns null on success, error string on failure.
  */
-function safe_zip_extract(string $zipPath, string $destDir): ?string
+function safe_zip_extract(string $zipPath, string $destDir, ?callable $progress = null): ?string
 {
     $magic = @file_get_contents($zipPath, false, null, 0, 4);
     if ($magic === false || !str_starts_with($magic, "PK\x03\x04")) {
@@ -358,9 +363,24 @@ function safe_zip_extract(string $zipPath, string $destDir): ?string
         $zip->close();
         return 'Cannot create extraction directory';
     }
-    $ok = $zip->extractTo($destDir);
+
+    $n = $zip->numFiles;
+    for ($i = 0; $i < $n; $i++) {
+        $name = $zip->getNameIndex($i);
+        if ($name === false) {
+            $zip->close();
+            return 'Unreadable archive entry';
+        }
+        if (!$zip->extractTo($destDir, $name)) {
+            $zip->close();
+            return 'Extraction failed at entry ' . $i;
+        }
+        if ($progress !== null && ($i % 250 === 0 || $i === $n - 1)) {
+            $progress($i + 1, $n);
+        }
+    }
     $zip->close();
-    return $ok ? null : 'Extraction failed';
+    return null;
 }
 
 /**

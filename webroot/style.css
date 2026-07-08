@@ -120,3 +120,27 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     margin-bottom: 14px;
     word-break: break-word;
 }
+
+/* Fetch progress bar */
+.prog { margin-top: 10px; max-width: 560px; }
+.prog-bar {
+    height: 10px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.prog-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width .6s ease;
+}
+.prog-text {
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+}
+.prog-text span:first-child { color: var(--ink); font-weight: 600; }

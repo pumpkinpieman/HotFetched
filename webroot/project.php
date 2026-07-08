@@ -89,6 +89,10 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 
         <div id="srcFetching" <?= $project['source_state'] === 'fetching' ? '' : 'hidden' ?>>
             <p class="empty" id="srcFetchMsg">Importing source&hellip; this can take a few minutes for a full firmware tree.</p>
+            <div class="prog">
+                <div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
+                <div class="prog-text"><span id="progPct">0%</span><span id="progDetail"></span></div>
+            </div>
         </div>
 
         <div id="srcReady" <?= $project['source_state'] === 'ready' ? '' : 'hidden' ?>>
@@ -173,6 +177,12 @@ function showFetching() {
     startPolling();
 }
 
+function setProgress(pct, detail) {
+    el('progFill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+    el('progPct').textContent = Math.round(pct) + '%';
+    el('progDetail').textContent = detail || '';
+}
+
 let pollTimer = null;
 function startPolling() {
     if (pollTimer) return;
@@ -182,9 +192,16 @@ function startPolling() {
         if (s.state !== 'fetching') {
             clearInterval(pollTimer);
             pollTimer = null;
+            setProgress(100, '');
             location.reload(); // server-rendered state is the source of truth
+            return;
         }
-    }, 2500);
+        if (s.progress) {
+            const mb = s.progress.mb !== null && s.progress.mb !== undefined
+                ? ' — ' + s.progress.mb.toFixed(1) + ' MB downloaded' : '';
+            setProgress(s.progress.pct, s.progress.phase + mb);
+        }
+    }, 1500);
 }
 
 // Prefill the GitHub form with the official upstream repo for this firmware.
@@ -209,22 +226,47 @@ el('ghImportBtn')?.addEventListener('click', async () => {
     else setMsg(res.error || 'Import failed');
 });
 
-el('zipImportBtn')?.addEventListener('click', async () => {
+el('zipImportBtn')?.addEventListener('click', () => {
     const f = el('zipFile').files[0];
     if (!f) { setMsg('Choose a ZIP file first'); return; }
-    setMsg('Uploading\u2026');
     const fd = new FormData();
     fd.append('action', 'import_zip');
     fd.append('csrf', CSRF);
     fd.append('id', String(PROJECT_ID));
     fd.append('zip', f);
-    let res;
-    try {
-        const r = await fetch('api/source.php', { method: 'POST', body: fd });
-        res = await r.json();
-    } catch { res = { ok: false, error: 'Upload failed' }; }
-    if (res.ok) showFetching();
-    else setMsg(res.error || 'Import failed');
+
+    // XHR (not fetch) for real upload progress events.
+    el('srcForms').hidden = true;
+    el('srcFetching').hidden = false;
+    el('srcError').hidden = true;
+    setMsg('');
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', 'api/source.php');
+    xhr.upload.addEventListener('progress', (e) => {
+        if (!e.lengthComputable) return;
+        const pct = e.loaded / e.total * 100;
+        setProgress(pct, 'Uploading — ' + (e.loaded / 1048576).toFixed(1) + ' / ' + (e.total / 1048576).toFixed(1) + ' MB');
+    });
+    xhr.addEventListener('load', () => {
+        let res;
+        try { res = JSON.parse(xhr.responseText); } catch { res = { ok: false, error: 'Bad response' }; }
+        if (res.ok) {
+            setProgress(0, 'Extracting…');
+            el('srcState').textContent = 'fetching';
+            el('srcState').className = 'tag st-fetching';
+            startPolling();
+        } else {
+            el('srcForms').hidden = false;
+            el('srcFetching').hidden = true;
+            setMsg(res.error || 'Import failed');
+        }
+    });
+    xhr.addEventListener('error', () => {
+        el('srcForms').hidden = false;
+        el('srcFetching').hidden = true;
+        setMsg('Upload failed');
+    });
+    xhr.send(fd);
 });
 
 el('srcResetBtn')?.addEventListener('click', async () => {
