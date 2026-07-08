@@ -162,6 +162,24 @@ switch ($action) {
 
     case 'status': {
         $p = load_project_for($body, false);
+
+        // Zombie recovery: a fetch with no log activity for too long means the
+        // worker died (container restart, launch failure). Flip to error so the
+        // UI recovers instead of polling forever.
+        if ($p['source_state'] === 'fetching') {
+            $log      = project_fetch_log((int)$p['id']);
+            $lastSign = is_file($log) ? (int)filemtime($log) : strtotime((string)$p['updated_at'] . ' UTC');
+            if ($lastSign !== false && (time() - $lastSign) > 120) {
+                $stmt = db()->prepare(
+                    "UPDATE projects SET source_state = 'error',
+                     source_error = 'Import stalled or was interrupted - please retry',
+                     updated_at = datetime('now') WHERE id = ? AND source_state = 'fetching'"
+                );
+                $stmt->execute([(int)$p['id']]);
+                $p = project_get((int)$p['id']);
+            }
+        }
+
         json_out([
             'ok'       => true,
             'state'    => $p['source_state'],

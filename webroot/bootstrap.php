@@ -307,7 +307,12 @@ function project_fetch_log(int $id): string
  */
 function source_worker_launch(int $projectId): void
 {
-    $php    = PHP_BINARY;
+    // PHP_BINARY under Apache mod_php resolves to the apache2 binary, NOT the
+    // PHP CLI — always resolve the CLI explicitly.
+    $php = '/usr/local/bin/php';
+    if (!is_executable($php)) {
+        $php = trim((string)shell_exec('command -v php')) ?: PHP_BINARY;
+    }
     $script = __DIR__ . '/source_worker.php';
     $cmd = sprintf(
         'setsid nohup %s %s %d < /dev/null > /dev/null 2>&1 &',
