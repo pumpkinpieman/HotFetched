@@ -6,15 +6,16 @@ FROM php:8.3-apache
 # git/unzip/zip: source acquisition and artifact packaging
 # ccache: iterative Marlin rebuild speed
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip zip ccache \
+        git unzip zip ccache libzip-dev \
         python3 python3-venv python3-pip \
         gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
         libusb-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- PHP extensions ---------------------------------------------------------
-# pdo and pdo_sqlite are compiled into the official php:8.3-apache image;
-# no docker-php-ext-install needed. Verified at runtime by bootstrap's PDO use.
+# pdo and pdo_sqlite are compiled into the official php:8.3-apache image.
+# zip (ZipArchive) is NOT — build it against libzip-dev for source ZIP imports.
+RUN docker-php-ext-install zip
 
 # --- PlatformIO (isolated venv, non-root ownership) -------------------------
 ENV PLATFORMIO_CORE_DIR=/opt/platformio \

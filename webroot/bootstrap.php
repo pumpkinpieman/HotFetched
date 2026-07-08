@@ -100,6 +100,8 @@ function init_schema(PDO $pdo): void
             source_ref   TEXT,
             source_state TEXT NOT NULL DEFAULT 'none'
                          CHECK(source_state IN ('none','fetching','ready','error')),
+            source_error TEXT,
+            source_detect TEXT,
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
         );
@@ -142,7 +144,8 @@ function run_migrations(PDO $pdo): void
     init_schema($pdo);
 
     $columns = [
-        // ['projects', 'example_col', "ALTER TABLE projects ADD COLUMN example_col TEXT"],
+        ['projects', 'source_error',  "ALTER TABLE projects ADD COLUMN source_error TEXT"],
+        ['projects', 'source_detect', "ALTER TABLE projects ADD COLUMN source_detect TEXT"],
     ];
 
     foreach ($columns as [$table, $column, $ddl]) {
@@ -239,4 +242,203 @@ function project_dir_delete(int $id): void
 function valid_project_name(string $name): bool
 {
     return (bool)preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/', $name);
+}
+
+/* --------------------------------------------------- Source acquisition */
+
+const HF_GITHUB_HOSTS      = ['github.com', 'www.github.com'];
+const HF_ZIP_MAX_ENTRIES   = 30000;
+const HF_ZIP_MAX_EXTRACTED = 2147483648; // 2 GiB uncompressed cap (zip-bomb guard)
+const HF_CLONE_TIMEOUT_S   = 600;
+
+/**
+ * Validate + normalize a GitHub repo URL. Returns canonical
+ * 'https://github.com/{owner}/{repo}' or null.
+ */
+function github_url_normalize(string $url): ?string
+{
+    $url = trim($url);
+    $p = parse_url($url);
+    if (!is_array($p)) {
+        return null;
+    }
+    $host = strtolower($p['host'] ?? '');
+    if (($p['scheme'] ?? '') !== 'https' || !in_array($host, HF_GITHUB_HOSTS, true)) {
+        return null;
+    }
+    if (!empty($p['user']) || !empty($p['pass']) || !empty($p['port']) || !empty($p['query']) || !empty($p['fragment'])) {
+        return null;
+    }
+    $segments = array_values(array_filter(explode('/', $p['path'] ?? ''), 'strlen'));
+    if (count($segments) < 2) {
+        return null;
+    }
+    [$owner, $repo] = $segments;
+    $repo = preg_replace('/\.git$/', '', $repo);
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/', $owner)
+        || !preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/', $repo)) {
+        return null;
+    }
+    return "https://github.com/{$owner}/{$repo}";
+}
+
+function valid_git_ref(string $ref): bool
+{
+    return $ref === '' || (bool)preg_match('#^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$#', $ref);
+}
+
+function project_source_dir(int $id): string
+{
+    return project_dir($id) . '/source';
+}
+
+function project_upload_zip(int $id): string
+{
+    return project_dir($id) . '/upload.zip';
+}
+
+/**
+ * Detached worker launch (FarFetched pattern) — never blocks the request.
+ */
+function source_worker_launch(int $projectId): void
+{
+    $php    = PHP_BINARY;
+    $script = __DIR__ . '/source_worker.php';
+    $cmd = sprintf(
+        'setsid nohup %s %s %d < /dev/null > /dev/null 2>&1 &',
+        escapeshellarg($php),
+        escapeshellarg($script),
+        $projectId
+    );
+    shell_exec($cmd);
+}
+
+/**
+ * Extract a ZIP with zip-slip, entry-count and uncompressed-size guards.
+ * Returns null on success, error string on failure.
+ */
+function safe_zip_extract(string $zipPath, string $destDir): ?string
+{
+    $magic = @file_get_contents($zipPath, false, null, 0, 4);
+    if ($magic === false || !str_starts_with($magic, "PK\x03\x04")) {
+        return 'File is not a valid ZIP archive';
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== true) {
+        return 'Unable to open ZIP archive';
+    }
+
+    if ($zip->numFiles > HF_ZIP_MAX_ENTRIES) {
+        $zip->close();
+        return 'Archive exceeds maximum entry count';
+    }
+
+    $total = 0;
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $st = $zip->statIndex($i);
+        if ($st === false) {
+            $zip->close();
+            return 'Unreadable archive entry';
+        }
+        $name = (string)$st['name'];
+        // zip-slip: reject absolute paths, drive letters, parent traversal
+        if (str_starts_with($name, '/') || str_contains($name, '..') || preg_match('/^[A-Za-z]:/', $name)) {
+            $zip->close();
+            return 'Archive contains unsafe paths (rejected)';
+        }
+        $total += (int)$st['size'];
+        if ($total > HF_ZIP_MAX_EXTRACTED) {
+            $zip->close();
+            return 'Archive uncompressed size exceeds 2 GiB cap';
+        }
+    }
+
+    if (!is_dir($destDir) && !@mkdir($destDir, 0775, true)) {
+        $zip->close();
+        return 'Cannot create extraction directory';
+    }
+    $ok = $zip->extractTo($destDir);
+    $zip->close();
+    return $ok ? null : 'Extraction failed';
+}
+
+/**
+ * Locate the firmware tree root inside a source dir (handles the
+ * single-subfolder layout of GitHub release ZIPs). Returns
+ * ['root' => relpath, 'files' => [...]] or null with $error set.
+ */
+function detect_firmware_tree(string $sourceDir, string $firmware, ?string &$error): ?array
+{
+    $error = null;
+    $candidates = [$sourceDir];
+    // GitHub ZIPs wrap everything in one top-level folder — include those.
+    foreach (glob($sourceDir . '/*', GLOB_ONLYDIR) ?: [] as $d) {
+        $candidates[] = $d;
+    }
+
+    foreach ($candidates as $root) {
+        if ($firmware === 'marlin') {
+            $conf    = $root . '/Marlin/Configuration.h';
+            $confAdv = $root . '/Marlin/Configuration_adv.h';
+            $pio     = $root . '/platformio.ini';
+            if (is_file($conf) && is_file($confAdv) && is_file($pio)) {
+                $rel = substr($root, strlen($sourceDir));
+                $rel = ltrim($rel, '/');
+                return [
+                    'root'  => $rel,
+                    'files' => [
+                        'configuration'     => ($rel === '' ? '' : $rel . '/') . 'Marlin/Configuration.h',
+                        'configuration_adv' => ($rel === '' ? '' : $rel . '/') . 'Marlin/Configuration_adv.h',
+                        'platformio_ini'    => ($rel === '' ? '' : $rel . '/') . 'platformio.ini',
+                    ],
+                ];
+            }
+        } else { // klipper
+            $mk  = $root . '/Makefile';
+            $src = $root . '/src';
+            $kpy = $root . '/klippy';
+            if (is_file($mk) && is_dir($src) && is_dir($kpy)) {
+                $rel = substr($root, strlen($sourceDir));
+                $rel = ltrim($rel, '/');
+                $refCfg = ($rel === '' ? '' : $rel . '/') . 'config/generic-bigtreetech-skr-3.cfg';
+                return [
+                    'root'  => $rel,
+                    'files' => [
+                        'makefile'         => ($rel === '' ? '' : $rel . '/') . 'Makefile',
+                        'reference_config' => is_file($sourceDir . '/' . $refCfg) ? $refCfg : null,
+                    ],
+                ];
+            }
+        }
+    }
+
+    $error = $firmware === 'marlin'
+        ? 'Not a Marlin source tree (expected Marlin/Configuration.h, Marlin/Configuration_adv.h, platformio.ini)'
+        : 'Not a Klipper source tree (expected Makefile, src/, klippy/)';
+    return null;
+}
+
+/**
+ * Recursive delete of a project's source dir, contained under HF_PROJECTS_DIR.
+ */
+function source_dir_reset(int $id): void
+{
+    $dir  = project_source_dir($id);
+    if (!is_dir($dir)) {
+        return;
+    }
+    $real = realpath($dir);
+    $root = realpath(HF_PROJECTS_DIR);
+    if ($real === false || $root === false || !str_starts_with($real, $root . '/')) {
+        return;
+    }
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($real, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($it as $f) {
+        $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+    }
+    @rmdir($real);
 }

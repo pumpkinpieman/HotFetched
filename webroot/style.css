@@ -98,3 +98,25 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .kv span { color: var(--muted); font-size: 12px; }
 .kv b { font-size: 14px; font-weight: 600; }
 .kv code { color: var(--accent); font-size: 13px; }
+
+/* Firmware Source panel */
+.src-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.src-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.src-card h3 { margin: 0; font-size: 14px; color: var(--ink); }
+.src-error {
+    border: 1px solid var(--bad);
+    color: var(--bad);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    word-break: break-word;
+}

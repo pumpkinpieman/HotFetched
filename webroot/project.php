@@ -15,6 +15,7 @@ if ($project === null) {
 $board   = board_def($project['board_id']);
 $variant = $board ? board_mcu_variant($board, (string)$project['mcu_variant']) : null;
 $fwKey   = $project['firmware']; // 'marlin' | 'klipper'
+$detect  = $project['source_detect'] !== null ? json_decode((string)$project['source_detect'], true) : null;
 ?>
 <!doctype html>
 <html lang="en">
@@ -47,18 +48,71 @@ $fwKey   = $project['firmware']; // 'marlin' | 'klipper'
         </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="srcPanel">
         <h2>Firmware Source</h2>
-        <div class="kv">
-            <div><span>State</span><b><span class="tag st-<?= h($project['source_state']) ?>"><?= h($project['source_state']) ?></span></b></div>
-            <div><span>Ref</span><b><?= h($project['source_ref'] ?? '—') ?></b></div>
+
+        <div class="kv" style="margin-bottom:14px">
+            <div><span>State</span><b><span class="tag st-<?= h($project['source_state']) ?>" id="srcState"><?= h($project['source_state']) ?></span></b></div>
+            <div><span>Ref</span><b id="srcRef"><?= h($project['source_ref'] ?? '—') ?></b></div>
         </div>
-        <p class="empty">Source acquisition (GitHub link / default ZIP import) ships in the next phase. This page is the anchor for it.</p>
+
+        <div id="srcError" class="src-error" <?= $project['source_error'] === null ? 'hidden' : '' ?>>
+            <?= h($project['source_error'] ?? '') ?>
+        </div>
+
+        <div id="srcForms" <?= in_array($project['source_state'], ['fetching','ready'], true) ? 'hidden' : '' ?>>
+            <div class="src-grid">
+                <div class="src-card">
+                    <h3>Import from GitHub</h3>
+                    <label>Repository URL
+                        <input type="url" id="ghUrl" placeholder="https://github.com/owner/repo">
+                    </label>
+                    <label>Tag / branch <span class="hint">(blank = default branch)</span>
+                        <input type="text" id="ghRef" placeholder="e.g. 2.1.3">
+                    </label>
+                    <div class="actions">
+                        <button class="btn primary" id="ghImportBtn">Import from GitHub</button>
+                        <button class="btn" id="ghDefaultBtn">Use official <?= h(ucfirst($fwKey)) ?></button>
+                    </div>
+                </div>
+                <div class="src-card">
+                    <h3>Import default files (ZIP)</h3>
+                    <label>Firmware source ZIP <span class="hint">(max 256 MB)</span>
+                        <input type="file" id="zipFile" accept=".zip,application/zip">
+                    </label>
+                    <div class="actions">
+                        <button class="btn primary" id="zipImportBtn">Upload &amp; Import</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="srcFetching" <?= $project['source_state'] === 'fetching' ? '' : 'hidden' ?>>
+            <p class="empty" id="srcFetchMsg">Importing source&hellip; this can take a few minutes for a full firmware tree.</p>
+        </div>
+
+        <div id="srcReady" <?= $project['source_state'] === 'ready' ? '' : 'hidden' ?>>
+            <div class="kv" id="srcDetect">
+                <?php if (is_array($detect)): ?>
+                    <div><span>Tree root</span><b><code><?= h(($detect['root'] ?? '') === '' ? '(repo root)' : $detect['root']) ?></code></b></div>
+                    <?php foreach (($detect['files'] ?? []) as $k => $v): if ($v === null) continue; ?>
+                    <div><span><?= h((string)$k) ?></span><b><code><?= h((string)$v) ?></code></b></div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+            <div class="actions">
+                <button class="btn danger" id="srcResetBtn">Replace source</button>
+            </div>
+        </div>
+
+        <span class="msg" id="srcMsg"></span>
     </section>
 
     <section class="panel">
         <h2>Configuration</h2>
-        <p class="empty">Configuration editor unlocks once a firmware source is imported.</p>
+        <p class="empty"><?= $project['source_state'] === 'ready'
+            ? 'Configuration editor ships in the next phase.'
+            : 'Configuration editor unlocks once a firmware source is imported.' ?></p>
     </section>
 
     <section class="panel">
@@ -88,5 +142,101 @@ $fwKey   = $project['firmware']; // 'marlin' | 'klipper'
         <?php endif; ?>
     </section>
 </main>
+
+<script>
+const CSRF       = <?= json_encode(csrf_token()) ?>;
+const PROJECT_ID = <?= (int)$project['id'] ?>;
+const FIRMWARE   = <?= json_encode($fwKey) ?>;
+
+const el = (i) => document.getElementById(i);
+
+async function srcApi(payload) {
+    const r = await fetch('api/source.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, csrf: CSRF, id: PROJECT_ID })
+    });
+    let data;
+    try { data = await r.json(); } catch { data = { ok: false, error: 'Bad response' }; }
+    return data;
+}
+
+function setMsg(t) { el('srcMsg').textContent = t || ''; }
+
+function showFetching() {
+    el('srcForms').hidden = true;
+    el('srcFetching').hidden = false;
+    el('srcError').hidden = true;
+    el('srcState').textContent = 'fetching';
+    el('srcState').className = 'tag st-fetching';
+    setMsg('');
+    startPolling();
+}
+
+let pollTimer = null;
+function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(async () => {
+        const s = await srcApi({ action: 'status' });
+        if (!s.ok) return;
+        if (s.state !== 'fetching') {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            location.reload(); // server-rendered state is the source of truth
+        }
+    }, 2500);
+}
+
+// Prefill the GitHub form with the official upstream repo for this firmware.
+(async () => {
+    if (el('srcForms').hidden) return;
+    const d = await srcApi({ action: 'defaults', firmware: FIRMWARE });
+    if (d.ok) {
+        if (!el('ghUrl').value) el('ghUrl').value = d.url;
+        if (!el('ghRef').value) el('ghRef').value = d.ref;
+    }
+})();
+
+el('ghDefaultBtn')?.addEventListener('click', async () => {
+    const d = await srcApi({ action: 'defaults', firmware: FIRMWARE });
+    if (d.ok) { el('ghUrl').value = d.url; el('ghRef').value = d.ref; }
+});
+
+el('ghImportBtn')?.addEventListener('click', async () => {
+    setMsg('Starting GitHub import\u2026');
+    const res = await srcApi({ action: 'import_github', url: el('ghUrl').value.trim(), ref: el('ghRef').value.trim() });
+    if (res.ok) showFetching();
+    else setMsg(res.error || 'Import failed');
+});
+
+el('zipImportBtn')?.addEventListener('click', async () => {
+    const f = el('zipFile').files[0];
+    if (!f) { setMsg('Choose a ZIP file first'); return; }
+    setMsg('Uploading\u2026');
+    const fd = new FormData();
+    fd.append('action', 'import_zip');
+    fd.append('csrf', CSRF);
+    fd.append('id', String(PROJECT_ID));
+    fd.append('zip', f);
+    let res;
+    try {
+        const r = await fetch('api/source.php', { method: 'POST', body: fd });
+        res = await r.json();
+    } catch { res = { ok: false, error: 'Upload failed' }; }
+    if (res.ok) showFetching();
+    else setMsg(res.error || 'Import failed');
+});
+
+el('srcResetBtn')?.addEventListener('click', async () => {
+    if (!confirm('Remove the imported source tree? Configuration edits tied to it will be lost.')) return;
+    const res = await srcApi({ action: 'reset' });
+    if (res.ok) location.reload();
+    else setMsg(res.error || 'Reset failed');
+});
+
+if (<?= json_encode($project['source_state'] === 'fetching') ?>) {
+    startPolling();
+}
+</script>
 </body>
 </html>
