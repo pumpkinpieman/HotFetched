@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # --- PHP extensions ---------------------------------------------------------
-RUN docker-php-ext-install pdo && docker-php-ext-enable pdo \
-    && docker-php-ext-configure pdo_sqlite && docker-php-ext-install pdo_sqlite
+# pdo and pdo_sqlite are compiled into the official php:8.3-apache image;
+# no docker-php-ext-install needed. Verified at runtime by bootstrap's PDO use.
 
 # --- PlatformIO (isolated venv, non-root ownership) -------------------------
 ENV PLATFORMIO_CORE_DIR=/opt/platformio \
