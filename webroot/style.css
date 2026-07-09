@@ -195,3 +195,30 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 
 /* The hidden attribute must always win (label{display:flex} was overriding it) */
 [hidden] { display: none !important; }
+
+/* Sound library browser */
+.lib-box { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.lib-search {
+    width: 100%;
+    margin-bottom: 6px;
+}
+.lib-list {
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 6px;
+}
+.lib-item {
+    text-align: left;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    border-radius: 5px;
+    padding: 5px 9px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.lib-item:hover { border-color: var(--accent); color: var(--accent); }
+.lib-credit { margin-top: 6px; font-size: 11px; color: var(--muted); }

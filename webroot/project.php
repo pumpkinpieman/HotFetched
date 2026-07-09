@@ -639,7 +639,108 @@ function sndRender() {
         cfgExtrasVisibility();
     });
     row2.append(tryBtn, applyBtn, impMsg);
-    imp.append(ta, fileIn, target, row2);
+
+    // Sound library (free-midi-chords, MIT) — install once, then browse.
+    const lib = document.createElement('div');
+    lib.className = 'lib-box';
+    const libHead = document.createElement('div');
+    libHead.className = 'actions';
+    const libBtn = document.createElement('button');
+    libBtn.type = 'button';
+    libBtn.className = 'btn sm';
+    libBtn.textContent = 'Sound library\u2026';
+    const libMsg = document.createElement('span');
+    libMsg.className = 'msg';
+    libHead.append(libBtn, libMsg);
+    const libPanel = document.createElement('div');
+    libPanel.hidden = true;
+
+    const libSearch = document.createElement('input');
+    libSearch.type = 'text';
+    libSearch.placeholder = 'Search moods: triumphant, mysterious, sad, hopeful\u2026';
+    libSearch.className = 'lib-search';
+    const libCat = document.createElement('select');
+    const libList = document.createElement('div');
+    libList.className = 'lib-list';
+    const libCredit = document.createElement('div');
+    libCredit.className = 'lib-credit';
+    libCredit.textContent = 'Library: ldrolez/free-midi-chords (MIT license)';
+    libPanel.append(libSearch, libCat, libList, libCredit);
+    lib.append(libHead, libPanel);
+
+    async function libApi(payload) {
+        const r = await fetch('api/soundlib.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, csrf: CSRF })
+        });
+        try { return await r.json(); } catch { return { ok: false, error: 'Bad response' }; }
+    }
+
+    let libTimer = null;
+    async function libRefresh() {
+        const q = libSearch.value.trim();
+        const res = await libApi({ action: 'list', q, category: libCat.value });
+        if (!res.ok) { libMsg.textContent = res.error || 'List failed'; return; }
+        if (libCat.options.length <= 1 && res.categories) {
+            libCat.innerHTML = '<option value="">All categories</option>';
+            for (const cname of res.categories) {
+                const o = document.createElement('option');
+                o.value = cname;
+                o.textContent = cname;
+                libCat.appendChild(o);
+            }
+        }
+        libList.innerHTML = '';
+        for (const rel of res.files) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'lib-item';
+            row.textContent = rel.replace(/\.mid$/i, '');
+            row.addEventListener('click', async () => {
+                libMsg.textContent = 'Loading\u2026';
+                const fr = await libApi({ action: 'file', path: rel });
+                if (!fr.ok) { libMsg.textContent = fr.error || 'Load failed'; return; }
+                const bin = Uint8Array.from(atob(fr.data_b64), ch => ch.charCodeAt(0));
+                midiSeq = midiToSeq(bin.buffer);
+                if (midiSeq) {
+                    ta.value = '';
+                    impMsg.textContent = fr.name + ': ' + midiSeq.length + ' tones \u2014 Preview, then Apply';
+                    libMsg.textContent = '';
+                    playSeq(midiSeq);
+                } else {
+                    libMsg.textContent = 'Could not parse ' + fr.name;
+                }
+            });
+            libList.appendChild(row);
+        }
+        libMsg.textContent = res.files.length + ' shown of ' + res.total;
+    }
+
+    libSearch.addEventListener('input', () => {
+        clearTimeout(libTimer);
+        libTimer = setTimeout(libRefresh, 300);
+    });
+    libCat.addEventListener('change', libRefresh);
+
+    libBtn.addEventListener('click', async () => {
+        if (!libPanel.hidden) { libPanel.hidden = true; return; }
+        const st = await libApi({ action: 'status' });
+        if (st.state === 'ready') {
+            libPanel.hidden = false;
+            libRefresh();
+        } else if (st.state === 'installing') {
+            libMsg.textContent = 'Installing library\u2026 (a few minutes, ~11k melodies)';
+            setTimeout(() => libBtn.click(), 4000);
+        } else {
+            if (!confirm('Download the free-midi-chords progression library (~5 MB zip, ~11,000 MIDI files, MIT license) into this server\u2019s private storage?')) return;
+            const r = await libApi({ action: 'install' });
+            libMsg.textContent = r.ok ? 'Installing library\u2026' : (r.error || 'Install failed');
+            if (r.ok) setTimeout(() => libBtn.click(), 4000);
+        }
+    });
+
+    imp.append(ta, fileIn, target, row2, lib);
     box.appendChild(imp);
 }
 

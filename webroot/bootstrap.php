@@ -1011,3 +1011,46 @@ function bootscreen_generate(string $imgPath): array|string
 
     return ['header' => $header, 'preview_b64' => base64_encode($png)];
 }
+
+/* ------------------------------------------------------- Sound library */
+
+function soundlib_dir(): string
+{
+    return HF_PRIVATE_DIR . '/soundlib';
+}
+
+function soundlib_state_write(array $state): void
+{
+    if (!is_dir(soundlib_dir())) {
+        @mkdir(soundlib_dir(), 0775, true);
+    }
+    @file_put_contents(soundlib_dir() . '/.state.json', json_encode($state));
+}
+
+function soundlib_status(): array
+{
+    $f = soundlib_dir() . '/.state.json';
+    if (!is_file($f)) {
+        return ['state' => 'none'];
+    }
+    $st = json_decode((string)file_get_contents($f), true);
+    if (!is_array($st)) {
+        return ['state' => 'none'];
+    }
+    // Stall recovery: installing with no state change for 10 minutes.
+    if (($st['state'] ?? '') === 'installing' && time() - (int)filemtime($f) > 600) {
+        return ['state' => 'error', 'error' => 'Install stalled - retry'];
+    }
+    return $st;
+}
+
+/** @return string[] relative .mid paths */
+function soundlib_index(): array
+{
+    $f = soundlib_dir() . '/index.json';
+    if (!is_file($f)) {
+        return [];
+    }
+    $idx = json_decode((string)file_get_contents($f), true);
+    return is_array($idx) ? $idx : [];
+}
