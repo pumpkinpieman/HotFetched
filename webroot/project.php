@@ -359,8 +359,77 @@ function cfgApplyVisibility() {
 
 let CFG_META = { mono_screens: [], event_presets: {} };
 
-function m300Lines(presetName) {
-    const seq = CFG_META.event_presets[presetName] || [];
+/* Piezo preview: square-wave synthesis of freq/ms sequences (Web Audio). */
+let audioCtx = null;
+function playSeq(seq) {
+    if (!seq.length) return;
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    let t = audioCtx.currentTime + 0.03;
+    for (const [f, ms] of seq) {
+        if (f > 0) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.value = f;
+            gain.gain.setValueAtTime(0.12, t);
+            gain.gain.setValueAtTime(0.0001, t + ms / 1000 - 0.005);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start(t);
+            osc.stop(t + ms / 1000);
+        }
+        t += ms / 1000;
+    }
+}
+
+function csvToSeq(csv) {
+    const nums = String(csv).split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+    const seq = [];
+    for (let i = 0; i + 1 < nums.length; i += 2) seq.push([nums[i], nums[i + 1]]);
+    return seq;
+}
+
+function eventSeq(key) {
+    const sel = document.getElementById('cf_' + key);
+    if (!sel) return [];
+    if (sel.value === 'custom') {
+        const cust = document.getElementById('cf_' + key + '_custom');
+        return cust ? csvToSeq(cust.value) : [];
+    }
+    return CFG_META.event_presets[sel.value] || [];
+}
+
+/* RTTTL (Nokia ringtone text) -> [[freq,ms],...] */
+function rtttlToSeq(text) {
+    const parts = String(text).trim().split(':');
+    if (parts.length < 3) return null;
+    const defs = { d: 4, o: 5, b: 63 };
+    for (const kv of parts[1].split(',')) {
+        const [k, v] = kv.split('=').map(s => s.trim().toLowerCase());
+        if (k && v) defs[k] = parseInt(v, 10);
+    }
+    const whole = 4 * 60000 / defs.b; // whole-note ms
+    const NOTES = { c: 0, 'c#': 1, d: 2, 'd#': 3, e: 4, f: 5, 'f#': 6, g: 7, 'g#': 8, a: 9, 'a#': 10, b: 11, h: 11 };
+    const seq = [];
+    for (let tok of parts.slice(2).join(':').split(',')) {
+        tok = tok.trim().toLowerCase();
+        const m = tok.match(/^(\d{1,2})?(p|[a-h]#?)(\.)?(\d)?(\.)?$/);
+        if (!m) continue;
+        const dur = parseInt(m[1] || defs.d, 10);
+        let ms = whole / dur;
+        if (m[3] || m[5]) ms *= 1.5;
+        if (m[2] === 'p') {
+            seq.push([0, Math.round(ms)]);
+            continue;
+        }
+        const octave = parseInt(m[4] || defs.o, 10);
+        const semis = NOTES[m[2]] + (octave - 4) * 12 - 9; // relative to A4
+        const freq = Math.round(440 * Math.pow(2, semis / 12));
+        seq.push([freq, Math.round(ms)]);
+    }
+    return seq.length ? seq : null;
+}
+
+function m300Lines(seq) {
     if (!seq.length) return '; (no sound)';
     return seq.map(([f, p]) => f === 0 ? `G4 P${p}` : `M300 S${f} P${p}`).join('\n');
 }
@@ -377,21 +446,102 @@ function sndRender() {
     for (const [key, label] of events) {
         const input = document.getElementById('cf_' + key);
         if (!input) continue;
+        const seq = eventSeq(key);
         const card = document.createElement('div');
         card.className = 'src-card';
         const h = document.createElement('h3');
         h.textContent = label + ' \u2014 ' + input.value;
         const pre = document.createElement('pre');
         pre.className = 'snd-code';
-        pre.textContent = m300Lines(input.value);
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn sm';
-        btn.textContent = 'Copy';
-        btn.addEventListener('click', () => navigator.clipboard.writeText(pre.textContent));
-        card.append(h, pre, btn);
+        pre.textContent = m300Lines(seq);
+        const row = document.createElement('div');
+        row.className = 'actions';
+        const play = document.createElement('button');
+        play.type = 'button';
+        play.className = 'btn sm';
+        play.textContent = '\u25B6 Play';
+        play.addEventListener('click', () => playSeq(eventSeq(key)));
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'btn sm';
+        copy.textContent = 'Copy';
+        copy.addEventListener('click', () => navigator.clipboard.writeText(pre.textContent));
+        row.append(play, copy);
+        card.append(h, pre, row);
         box.appendChild(card);
     }
+
+    // Import card: RTTTL / freq-ms CSV -> apply as a custom sequence to a chosen slot.
+    const imp = document.createElement('div');
+    imp.className = 'src-card';
+    imp.innerHTML = '<h3>Import melody (RTTTL ringtone text or freq,ms CSV)</h3>';
+    const ta = document.createElement('textarea');
+    ta.className = 'snd-import';
+    ta.placeholder = 'Beep:d=8,o=5,b=120:c,e,g  \u2014 or \u2014  523,120,0,40,784,180';
+    const target = document.createElement('select');
+    for (const [k, lbl] of [['startup', 'Power-on tune (firmware)'], ...events]) {
+        const o = document.createElement('option');
+        o.value = k;
+        o.textContent = 'Apply to: ' + (lbl || k);
+        target.appendChild(o);
+    }
+    const row2 = document.createElement('div');
+    row2.className = 'actions';
+    const tryBtn = document.createElement('button');
+    tryBtn.type = 'button';
+    tryBtn.className = 'btn sm';
+    tryBtn.textContent = '\u25B6 Preview';
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'btn sm primary';
+    applyBtn.textContent = 'Apply';
+    const impMsg = document.createElement('span');
+    impMsg.className = 'msg';
+    const parseImport = () => {
+        const txt = ta.value.trim();
+        if (!txt) return null;
+        return txt.includes(':') ? rtttlToSeq(txt) : (csvToSeq(txt).length ? csvToSeq(txt) : null);
+    };
+    tryBtn.addEventListener('click', () => {
+        const seq = parseImport();
+        if (seq) playSeq(seq);
+        else impMsg.textContent = 'Could not parse melody';
+    });
+    applyBtn.addEventListener('click', () => {
+        const seq = parseImport();
+        if (!seq) { impMsg.textContent = 'Could not parse melody'; return; }
+        const csv = seq.flat().join(',');
+        if (target.value === 'startup') {
+            const sel = document.getElementById('cf_startup_tune');
+            const cust = document.getElementById('cf_startup_tune_custom');
+            if (sel && cust) { sel.value = 'custom'; cust.value = csv; }
+        } else {
+            const sel = document.getElementById('cf_' + target.value);
+            const cust = document.getElementById('cf_' + target.value + '_custom');
+            if (sel && cust) { sel.value = 'custom'; cust.value = csv; }
+        }
+        impMsg.textContent = 'Applied \u2014 remember to Submit Configuration';
+        cfgApplyVisibility();
+        cfgExtrasVisibility();
+    });
+    row2.append(tryBtn, applyBtn, impMsg);
+    imp.append(ta, target, row2);
+    box.appendChild(imp);
+}
+
+function startupSeq() {
+    const sel = document.getElementById('cf_startup_tune');
+    if (!sel) return [];
+    if (sel.value === 'custom') {
+        const cust = document.getElementById('cf_startup_tune_custom');
+        return cust ? csvToSeq(cust.value) : [];
+    }
+    const presets = {
+        chime_up: [[523,120],[0,40],[659,120],[0,40],[784,180]],
+        chime_down: [[784,120],[0,40],[659,120],[0,40],[523,180]],
+        triple: [[880,90],[0,60],[880,90],[0,60],[880,90]],
+    };
+    return presets[sel.value] || [];
 }
 
 function cfgExtrasVisibility() {
@@ -399,6 +549,19 @@ function cfgExtrasVisibility() {
     if (el('bsBlock')) el('bsBlock').hidden = !(screen && CFG_META.mono_screens.includes(screen.value));
     if (el('sndBlock')) el('sndBlock').hidden = false;
     sndRender();
+
+    // Play button next to the startup tune selector (added once).
+    const st = document.getElementById('cf_startup_tune');
+    if (st && !document.getElementById('stPlayBtn')) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.id = 'stPlayBtn';
+        b.className = 'btn sm';
+        b.textContent = '\u25B6 Play';
+        b.style.marginTop = '6px';
+        b.addEventListener('click', () => playSeq(startupSeq()));
+        st.parentElement.appendChild(b);
+    }
 }
 
 function cfgRender(fields, values, meta) {

@@ -179,3 +179,19 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     overflow-x: auto;
     margin: 0;
 }
+
+.snd-import {
+    width: 100%;
+    min-height: 54px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: monospace;
+    resize: vertical;
+}
+
+/* The hidden attribute must always win (label{display:flex} was overriding it) */
+[hidden] { display: none !important; }

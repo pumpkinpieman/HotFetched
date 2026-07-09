@@ -774,7 +774,7 @@ function marlin_field_defs_extended(array $board): array
     $tuneLabels = ['keep' => 'Keep current', 'silent' => 'Silent (no tune)',
                    'chime_up' => 'Chime up', 'chime_down' => 'Chime down',
                    'triple' => 'Triple beep', 'custom' => 'Custom sequence'];
-    $evOpts = array_keys(HF_EVENT_PRESETS);
+    $evOpts = array_merge(array_keys(HF_EVENT_PRESETS), ['custom']);
 
     $fields = [
         ['key' => 'screen', 'label' => 'Screen / display', 'group' => 'Display',
@@ -805,6 +805,9 @@ function marlin_field_defs_extended(array $board): array
     ] as $key => $label) {
         $fields[] = ['key' => $key, 'label' => $label, 'group' => 'Audio (host events)',
                      'type' => 'select', 'options' => $evOpts];
+        $fields[] = ['key' => $key . '_custom', 'label' => $label . ' — custom (freq,ms pairs)',
+                     'group' => 'Audio (host events)', 'type' => 'text', 'maxlen' => 400,
+                     'requires' => [$key => ['custom']]];
     }
     return $fields;
 }
@@ -846,6 +849,9 @@ function marlin_current_values_extended(array $doc, array $board): array
         'ev_print_start' => 'single', 'ev_print_pause' => 'double',
         'ev_print_error' => 'alarm',  'ev_print_end' => 'chime_up',
         'ev_connect' => 'triple',
+        'ev_print_start_custom' => '', 'ev_print_pause_custom' => '',
+        'ev_print_error_custom' => '', 'ev_print_end_custom' => '',
+        'ev_connect_custom' => '',
     ];
 }
 
