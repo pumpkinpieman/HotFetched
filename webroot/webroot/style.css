@@ -192,3 +192,6 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     font-family: monospace;
     resize: vertical;
 }
+
+/* The hidden attribute must always win (label{display:flex} was overriding it) */
+[hidden] { display: none !important; }
