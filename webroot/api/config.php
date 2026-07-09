@@ -7,9 +7,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     json_out(['ok' => false, 'error' => 'POST required'], 405);
 }
 
-$body = json_decode(file_get_contents('php://input') ?: '', true);
-if (!is_array($body)) {
-    json_out(['ok' => false, 'error' => 'Invalid JSON body'], 400);
+$isMultipart = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data');
+if ($isMultipart) {
+    $body = $_POST;
+} else {
+    $body = json_decode(file_get_contents('php://input') ?: '', true);
+    if (!is_array($body)) {
+        json_out(['ok' => false, 'error' => 'Invalid JSON body'], 400);
+    }
 }
 
 csrf_verify($body['csrf'] ?? null);
@@ -39,20 +44,23 @@ function load_config_context(array $body): array
     }
     $detect = json_decode((string)$p['source_detect'], true);
     $confRel = $detect['files']['configuration'] ?? null;
-    if (!is_string($confRel)) {
+    $advRel  = $detect['files']['configuration_adv'] ?? null;
+    if (!is_string($confRel) || !is_string($advRel)) {
         json_out(['ok' => false, 'error' => 'Source detection data missing - re-import the source'], 409);
     }
-    // Contain the path inside the project's source dir.
-    $confPath = realpath(project_source_dir($id) . '/' . $confRel);
+    // Contain paths inside the project's source dir.
     $rootPath = realpath(project_source_dir($id));
-    if ($confPath === false || $rootPath === false || !str_starts_with($confPath, $rootPath . '/')) {
-        json_out(['ok' => false, 'error' => 'Configuration.h not found in source tree'], 409);
+    $confPath = realpath(project_source_dir($id) . '/' . $confRel);
+    $advPath  = realpath(project_source_dir($id) . '/' . $advRel);
+    if ($confPath === false || $advPath === false || $rootPath === false
+        || !str_starts_with($confPath, $rootPath . '/') || !str_starts_with($advPath, $rootPath . '/')) {
+        json_out(['ok' => false, 'error' => 'Configuration files not found in source tree'], 409);
     }
     $doc = marlin_config_parse($confPath);
     if ($doc === null) {
         json_out(['ok' => false, 'error' => 'Unable to read Configuration.h'], 500);
     }
-    return [$p, $board, $doc, $confPath];
+    return [$p, $board, $doc, $confPath, $advPath];
 }
 
 /**
@@ -72,7 +80,9 @@ function validate_fields(array $fields, array $input): array
         if (isset($f['requires'])) {
             $met = true;
             foreach ($f['requires'] as $rk => $rv) {
-                if ((string)($input[$rk] ?? '') !== (string)$rv) {
+                $have = (string)($input[$rk] ?? '');
+                $okReq = is_array($rv) ? in_array($have, array_map('strval', $rv), true) : $have === (string)$rv;
+                if (!$okReq) {
                     $met = false;
                     break;
                 }
@@ -113,6 +123,21 @@ function validate_fields(array $fields, array $input): array
                 $values[$key] = (string)$n;
                 break;
 
+            case 'float':
+                $n = filter_var($raw, FILTER_VALIDATE_FLOAT);
+                if ($n === false) {
+                    $errors[$key] = 'Required (number)';
+                    $values[$key] = '';
+                    break;
+                }
+                if (isset($f['min']) && $n < $f['min']) {
+                    $errors[$key] = 'Minimum ' . $f['min'];
+                } elseif (isset($f['max']) && $n > $f['max']) {
+                    $errors[$key] = 'Maximum ' . $f['max'];
+                }
+                $values[$key] = rtrim(rtrim(sprintf('%.2f', $n), '0'), '.');
+                break;
+
             case 'select':
                 $raw = is_string($raw) ? $raw : '';
                 if (!in_array($raw, $f['options'], true)) {
@@ -133,10 +158,10 @@ function validate_fields(array $fields, array $input): array
 switch ($action) {
 
     case 'get': {
-        [$p, $board, $doc, ] = load_config_context($body);
+        [$p, $board, $doc, , ] = load_config_context($body);
 
-        $fields  = marlin_field_defs($board);
-        $current = marlin_current_values($doc);
+        $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_extended($board));
+        $current = array_merge(marlin_current_values($doc), marlin_current_values_extended($doc, $board));
 
         // Saved values (from a previous submit) override file-derived ones.
         $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
@@ -145,13 +170,20 @@ switch ($action) {
             $current[$row['field_key']] = $row['field_value'];
         }
 
-        json_out(['ok' => true, 'fields' => $fields, 'values' => $current]);
+        $mono = [];
+        foreach (($board['marlin']['screens'] ?? []) as $s) {
+            if ($s['type'] === 'mono128x64') {
+                $mono[] = $s['id'];
+            }
+        }
+        json_out(['ok' => true, 'fields' => $fields, 'values' => $current,
+                  'meta' => ['mono_screens' => $mono, 'event_presets' => HF_EVENT_PRESETS]]);
     }
 
     case 'save': {
-        [$p, $board, $doc, $confPath] = load_config_context($body);
+        [$p, $board, $doc, $confPath, ] = load_config_context($body);
 
-        $fields = marlin_field_defs($board);
+        $fields = array_merge(marlin_field_defs($board), marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
         [$values, $errors] = validate_fields($fields, $input);
 
@@ -176,7 +208,10 @@ switch ($action) {
         }
 
         // Apply to Configuration.h (surgical line edits).
-        $applied = marlin_apply_values($doc, $values, $board);
+        $applied = array_merge(
+            marlin_apply_values($doc, $values, $board),
+            marlin_apply_values_extended($doc, $values, $board)
+        );
         if (!marlin_config_write($doc, $confPath)) {
             json_out(['ok' => false, 'error' => 'Could not write Configuration.h'], 500);
         }
@@ -184,6 +219,37 @@ switch ($action) {
         $pdo->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$p['id']]);
 
         json_out(['ok' => true, 'applied' => $applied]);
+    }
+
+    case 'bootscreen': {
+        [$p, , , , $advPath] = load_config_context($body);
+
+        $file = $_FILES['image'] ?? null;
+        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            json_out(['ok' => false, 'error' => 'No image uploaded'], 422);
+        }
+        if ((int)$file['size'] > 8 * 1024 * 1024) {
+            json_out(['ok' => false, 'error' => 'Image too large (8 MB max)'], 422);
+        }
+
+        $result = bootscreen_generate((string)$file['tmp_name']);
+        if (is_string($result)) {
+            json_out(['ok' => false, 'error' => $result], 422);
+        }
+
+        // Write Marlin/_Bootscreen.h next to Configuration_adv.h.
+        $bsPath = dirname($advPath) . '/_Bootscreen.h';
+        if (@file_put_contents($bsPath, $result['header']) === false) {
+            json_out(['ok' => false, 'error' => 'Could not write _Bootscreen.h'], 500);
+        }
+
+        // Enable SHOW_CUSTOM_BOOTSCREEN in Configuration_adv.h.
+        $adv = marlin_config_parse($advPath);
+        if ($adv !== null && marlin_config_set($adv, 'SHOW_CUSTOM_BOOTSCREEN', null, true)) {
+            marlin_config_write($adv, $advPath);
+        }
+
+        json_out(['ok' => true, 'preview_b64' => $result['preview_b64']]);
     }
 
     default:

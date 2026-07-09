@@ -122,6 +122,33 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
             <p class="empty" id="cfgLoading">Loading configuration&hellip;</p>
             <form id="cfgForm" hidden>
                 <div id="cfgGroups"></div>
+
+                <div id="bsBlock" hidden>
+                    <h3 class="cfg-group">Boot Image (128&times;64 monochrome LCD)</h3>
+                    <p class="empty">Full-color images are converted to a 1-bit dithered (pixelated) bitmap &mdash; that's what the LCD hardware can display.</p>
+                    <div class="src-grid">
+                        <div class="src-card">
+                            <label>Boot image (PNG/JPEG, max 8 MB)
+                                <input type="file" id="bsFile" accept="image/png,image/jpeg">
+                            </label>
+                            <div class="actions">
+                                <button type="button" class="btn" id="bsUploadBtn">Convert &amp; Install</button>
+                                <span class="msg" id="bsMsg"></span>
+                            </div>
+                        </div>
+                        <div class="src-card" id="bsPreviewCard" hidden>
+                            <h3>Dithered preview (as the LCD will show it)</h3>
+                            <img id="bsPreview" alt="Bootscreen preview" class="bs-preview">
+                        </div>
+                    </div>
+                </div>
+
+                <div id="sndBlock" hidden>
+                    <h3 class="cfg-group">Host Event G-code (M300 tones)</h3>
+                    <p class="empty">Paste these into your slicer/host event hooks (start G-code, pause script, error hook, end G-code). The power-on tune above is baked into the firmware; these run from the host.</p>
+                    <div id="sndSnippets" class="snd-grid"></div>
+                </div>
+
                 <div class="actions">
                     <button type="submit" class="btn primary">Submit Configuration</button>
                     <span class="msg" id="cfgMsg"></span>
@@ -330,8 +357,53 @@ function cfgApplyVisibility() {
     }
 }
 
-function cfgRender(fields, values) {
+let CFG_META = { mono_screens: [], event_presets: {} };
+
+function m300Lines(presetName) {
+    const seq = CFG_META.event_presets[presetName] || [];
+    if (!seq.length) return '; (no sound)';
+    return seq.map(([f, p]) => f === 0 ? `G4 P${p}` : `M300 S${f} P${p}`).join('\n');
+}
+
+function sndRender() {
+    const box = el('sndSnippets');
+    if (!box) return;
+    box.innerHTML = '';
+    const events = [
+        ['ev_print_start', 'Print start'], ['ev_print_pause', 'Print paused'],
+        ['ev_print_error', 'Print error'], ['ev_print_end', 'Print end'],
+        ['ev_connect', 'Connectivity issue'],
+    ];
+    for (const [key, label] of events) {
+        const input = document.getElementById('cf_' + key);
+        if (!input) continue;
+        const card = document.createElement('div');
+        card.className = 'src-card';
+        const h = document.createElement('h3');
+        h.textContent = label + ' \u2014 ' + input.value;
+        const pre = document.createElement('pre');
+        pre.className = 'snd-code';
+        pre.textContent = m300Lines(input.value);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn sm';
+        btn.textContent = 'Copy';
+        btn.addEventListener('click', () => navigator.clipboard.writeText(pre.textContent));
+        card.append(h, pre, btn);
+        box.appendChild(card);
+    }
+}
+
+function cfgExtrasVisibility() {
+    const screen = document.getElementById('cf_screen');
+    if (el('bsBlock')) el('bsBlock').hidden = !(screen && CFG_META.mono_screens.includes(screen.value));
+    if (el('sndBlock')) el('sndBlock').hidden = false;
+    sndRender();
+}
+
+function cfgRender(fields, values, meta) {
     CFG_FIELDS = fields;
+    CFG_META = meta || CFG_META;
     const groups = {};
     for (const f of fields) (groups[f.group] ??= []).push(f);
 
@@ -350,7 +422,7 @@ function cfgRender(fields, values) {
             wrap.id = 'cfw_' + f.key;
 
             const cap = document.createElement('span');
-            cap.textContent = f.label + (f.type === 'int' && f.min !== undefined ? ` (${f.min}\u2013${f.max})` : '');
+            cap.textContent = f.label + ((f.type === 'int' || f.type === 'float') && f.min !== undefined ? ` (${f.min}\u2013${f.max})` : '');
             wrap.appendChild(cap);
 
             let input;
@@ -359,7 +431,7 @@ function cfgRender(fields, values) {
                 for (const o of f.options) {
                     const opt = document.createElement('option');
                     opt.value = o;
-                    opt.textContent = o;
+                    opt.textContent = (f.option_labels && f.option_labels[o]) || o;
                     input.appendChild(opt);
                 }
                 if (values[f.key] !== null && values[f.key] !== undefined) input.value = values[f.key];
@@ -370,17 +442,18 @@ function cfgRender(fields, values) {
                 wrap.classList.add('cfg-bool');
             } else {
                 input = document.createElement('input');
-                input.type = f.type === 'int' ? 'number' : 'text';
-                if (f.type === 'int') {
+                input.type = (f.type === 'int' || f.type === 'float') ? 'number' : 'text';
+                if (f.type === 'int' || f.type === 'float') {
                     if (f.min !== undefined) input.min = f.min;
                     if (f.max !== undefined) input.max = f.max;
+                    if (f.type === 'float') input.step = '0.01';
                 }
                 if (f.maxlen) input.maxLength = f.maxlen;
                 input.value = values[f.key] ?? '';
             }
             input.id = 'cf_' + f.key;
             input.required = f.type !== 'bool';
-            input.addEventListener('change', cfgApplyVisibility);
+            input.addEventListener('change', () => { cfgApplyVisibility(); cfgExtrasVisibility(); });
             wrap.appendChild(input);
 
             const err = document.createElement('span');
@@ -393,6 +466,7 @@ function cfgRender(fields, values) {
         root.appendChild(grid);
     }
     cfgApplyVisibility();
+    cfgExtrasVisibility();
     el('cfgLoading').hidden = true;
     cfgForm.hidden = false;
 }
@@ -400,9 +474,32 @@ function cfgRender(fields, values) {
 if (cfgForm) {
     (async () => {
         const res = await cfgApi({ action: 'get' });
-        if (res.ok) cfgRender(res.fields, res.values);
+        if (res.ok) cfgRender(res.fields, res.values, res.meta);
         else el('cfgLoading').textContent = res.error || 'Failed to load configuration';
     })();
+
+    el('bsUploadBtn')?.addEventListener('click', async () => {
+        const f = el('bsFile').files[0];
+        if (!f) { el('bsMsg').textContent = 'Choose an image first'; return; }
+        el('bsMsg').textContent = 'Converting\u2026';
+        const fd = new FormData();
+        fd.append('action', 'bootscreen');
+        fd.append('csrf', CSRF);
+        fd.append('id', String(PROJECT_ID));
+        fd.append('image', f);
+        let res;
+        try {
+            const r = await fetch('api/config.php', { method: 'POST', body: fd });
+            res = await r.json();
+        } catch { res = { ok: false, error: 'Upload failed' }; }
+        if (res.ok) {
+            el('bsMsg').textContent = 'Installed _Bootscreen.h + enabled SHOW_CUSTOM_BOOTSCREEN \u2713';
+            el('bsPreview').src = 'data:image/png;base64,' + res.preview_b64;
+            el('bsPreviewCard').hidden = false;
+        } else {
+            el('bsMsg').textContent = res.error || 'Conversion failed';
+        }
+    });
 
     cfgForm.addEventListener('submit', async (e) => {
         e.preventDefault();

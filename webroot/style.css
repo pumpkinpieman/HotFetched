@@ -158,3 +158,24 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .cfg-err { color: var(--bad); font-size: 12px; min-height: 14px; }
 .cfg-bool { flex-direction: row; align-items: center; gap: 10px; }
 .cfg-bool input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+/* Bootscreen + sounds */
+.bs-preview {
+    width: 100%;
+    max-width: 384px;
+    image-rendering: pixelated;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+}
+.snd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.snd-code {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: var(--ink);
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0;
+}

@@ -739,3 +739,269 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
 
     return $applied;
 }
+
+/* ------------------------------------------ Phase 4: display/probe/audio */
+
+const HF_TUNE_PRESETS = [
+    'chime_up'   => '{ 523,120, 0,40, 659,120, 0,40, 784,180 }',
+    'chime_down' => '{ 784,120, 0,40, 659,120, 0,40, 523,180 }',
+    'triple'     => '{ 880,90, 0,60, 880,90, 0,60, 880,90 }',
+];
+
+const HF_EVENT_PRESETS = [
+    'none'       => [],
+    'single'     => [[880, 120]],
+    'double'     => [[880, 100], [0, 60], [880, 100]],
+    'triple'     => [[880, 90], [0, 60], [880, 90], [0, 60], [880, 90]],
+    'chime_up'   => [[523, 120], [0, 40], [659, 120], [0, 40], [784, 180]],
+    'chime_down' => [[784, 120], [0, 40], [659, 120], [0, 40], [523, 180]],
+    'alarm'      => [[220, 350], [0, 120], [220, 350], [0, 120], [220, 350]],
+];
+
+/** Phase-4 field groups, appended to the curated Marlin fields. */
+function marlin_field_defs_extended(array $board): array
+{
+    $screens = $board['marlin']['screens'] ?? [];
+    $probes  = $board['marlin']['probes'] ?? [];
+
+    $screenIds    = array_column($screens, 'id');
+    $screenLabels = array_combine($screenIds, array_column($screens, 'label'));
+    $probeIds     = array_column($probes, 'id');
+    $probeLabels  = array_combine($probeIds, array_column($probes, 'label'));
+    $probeActive  = array_values(array_filter($probeIds, fn ($p) => $p !== 'none'));
+
+    $tuneOpts  = array_merge(['keep', 'silent'], array_keys(HF_TUNE_PRESETS), ['custom']);
+    $tuneLabels = ['keep' => 'Keep current', 'silent' => 'Silent (no tune)',
+                   'chime_up' => 'Chime up', 'chime_down' => 'Chime down',
+                   'triple' => 'Triple beep', 'custom' => 'Custom sequence'];
+    $evOpts = array_keys(HF_EVENT_PRESETS);
+
+    $fields = [
+        ['key' => 'screen', 'label' => 'Screen / display', 'group' => 'Display',
+         'type' => 'select', 'options' => $screenIds, 'option_labels' => $screenLabels],
+
+        ['key' => 'probe', 'label' => 'Bed probe', 'group' => 'Probe',
+         'type' => 'select', 'options' => $probeIds, 'option_labels' => $probeLabels],
+        ['key' => 'probe_off_x', 'label' => 'Probe offset X (mm)', 'group' => 'Probe',
+         'type' => 'float', 'min' => -100, 'max' => 100, 'requires' => ['probe' => $probeActive]],
+        ['key' => 'probe_off_y', 'label' => 'Probe offset Y (mm)', 'group' => 'Probe',
+         'type' => 'float', 'min' => -100, 'max' => 100, 'requires' => ['probe' => $probeActive]],
+        ['key' => 'probe_off_z', 'label' => 'Probe offset Z (mm)', 'group' => 'Probe',
+         'type' => 'float', 'min' => -10, 'max' => 10, 'requires' => ['probe' => $probeActive]],
+
+        ['key' => 'speaker', 'label' => 'Speaker fitted (SPEAKER — piezo tones)', 'group' => 'Audio', 'type' => 'bool'],
+        ['key' => 'startup_tune', 'label' => 'Power-on tune (STARTUP_TUNE)', 'group' => 'Audio',
+         'type' => 'select', 'options' => $tuneOpts, 'option_labels' => $tuneLabels],
+        ['key' => 'startup_tune_custom', 'label' => 'Custom tune (freq,ms pairs e.g. 523,120,0,40,784,180)', 'group' => 'Audio',
+         'type' => 'text', 'maxlen' => 200, 'requires' => ['startup_tune' => ['custom']]],
+    ];
+
+    foreach ([
+        'ev_print_start' => 'Print start sound',
+        'ev_print_pause' => 'Print paused sound',
+        'ev_print_error' => 'Print error sound',
+        'ev_print_end'   => 'Print end sound',
+        'ev_connect'     => 'Connectivity issue sound',
+    ] as $key => $label) {
+        $fields[] = ['key' => $key, 'label' => $label, 'group' => 'Audio (host events)',
+                     'type' => 'select', 'options' => $evOpts];
+    }
+    return $fields;
+}
+
+/** Current values for phase-4 fields from a parsed Configuration.h. */
+function marlin_current_values_extended(array $doc, array $board): array
+{
+    $d = $doc['defines'];
+
+    $screen = 'none';
+    foreach (($board['marlin']['screens'] ?? []) as $s) {
+        if ($s['type'] === 'mono128x64' && ($d[$s['id']]['enabled'] ?? false)) {
+            $screen = $s['id'];
+            break;
+        }
+    }
+    if ($screen === 'none' && ($d['SERIAL_PORT_2']['enabled'] ?? false)) {
+        $screen = 'btt_serial_tft';
+    }
+
+    $probe = 'none';
+    if ($d['BLTOUCH']['enabled'] ?? false) {
+        $probe = 'bltouch';
+    } elseif ($d['FIX_MOUNTED_PROBE']['enabled'] ?? false) {
+        $probe = ($d['Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN']['enabled'] ?? false) ? 'fixed_probe_zmin' : 'fixed_probe_port';
+    }
+
+    [$px, $py, $pz] = marlin_extract_numbers($d['NOZZLE_TO_PROBE_OFFSET']['value'] ?? null, 3);
+
+    return [
+        'screen' => $screen,
+        'probe'  => $probe,
+        'probe_off_x' => $px !== null ? rtrim(rtrim(sprintf('%.2f', $px), '0'), '.') : '0',
+        'probe_off_y' => $py !== null ? rtrim(rtrim(sprintf('%.2f', $py), '0'), '.') : '0',
+        'probe_off_z' => $pz !== null ? rtrim(rtrim(sprintf('%.2f', $pz), '0'), '.') : '0',
+        'speaker' => ($d['SPEAKER']['enabled'] ?? false) ? '1' : '0',
+        'startup_tune' => 'keep',
+        'startup_tune_custom' => '',
+        'ev_print_start' => 'single', 'ev_print_pause' => 'double',
+        'ev_print_error' => 'alarm',  'ev_print_end' => 'chime_up',
+        'ev_connect' => 'triple',
+    ];
+}
+
+/** Apply phase-4 values to Configuration.h (display, probe, audio). */
+function marlin_apply_values_extended(array &$doc, array $v, array $board): array
+{
+    $applied = [];
+    $set = function (string $key, ?string $value, bool $enable = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $key, $value, $enable)) {
+            $applied[] = $key;
+        }
+    };
+    $keepValue = fn (string $key): ?string => $doc['defines'][$key]['value'] ?? null;
+
+    // Display: enable the chosen mono screen, disable the others; serial TFT
+    // enables the secondary serial port instead.
+    foreach (($board['marlin']['screens'] ?? []) as $s) {
+        if ($s['type'] !== 'mono128x64') {
+            continue;
+        }
+        $set($s['id'], null, $v['screen'] === $s['id']);
+    }
+    $set('SERIAL_PORT_2', '-1', $v['screen'] === 'btt_serial_tft');
+
+    // Probe
+    foreach (($board['marlin']['probes'] ?? []) as $p) {
+        if ($p['id'] !== $v['probe']) {
+            continue;
+        }
+        foreach ($p['enable'] as $k) {
+            $set($k, $keepValue($k), true);
+        }
+        foreach ($p['disable'] as $k) {
+            $set($k, $keepValue($k), false);
+        }
+    }
+    if ($v['probe'] !== 'none') {
+        $fmt = fn (string $n): string => rtrim(rtrim(sprintf('%.2f', (float)$n), '0'), '.');
+        $set('NOZZLE_TO_PROBE_OFFSET', sprintf('{ %s, %s, %s }',
+            $fmt($v['probe_off_x']), $fmt($v['probe_off_y']), $fmt($v['probe_off_z'])));
+    }
+
+    // Audio
+    $set('SPEAKER', null, $v['speaker'] === '1');
+    switch ($v['startup_tune']) {
+        case 'keep':
+            break;
+        case 'silent':
+            $set('STARTUP_TUNE', $keepValue('STARTUP_TUNE'), false);
+            break;
+        case 'custom':
+            $nums = array_map('intval', array_filter(array_map('trim', explode(',', (string)$v['startup_tune_custom'])), 'strlen'));
+            if (count($nums) >= 2 && count($nums) % 2 === 0) {
+                $set('STARTUP_TUNE', '{ ' . implode(', ', $nums) . ' }');
+            }
+            break;
+        default:
+            if (isset(HF_TUNE_PRESETS[$v['startup_tune']])) {
+                $set('STARTUP_TUNE', HF_TUNE_PRESETS[$v['startup_tune']]);
+            }
+    }
+
+    return $applied;
+}
+
+/* ------------------------------------------------- Bootscreen generator */
+
+/**
+ * Convert an uploaded image into a Marlin _Bootscreen.h (128x64 1-bit,
+ * Floyd-Steinberg dithered). Returns ['header' => ..., 'preview_b64' => ...]
+ * or an error string.
+ */
+function bootscreen_generate(string $imgPath): array|string
+{
+    if (!function_exists('imagecreatefromstring')) {
+        return 'GD extension not available in this build';
+    }
+    $raw = @file_get_contents($imgPath);
+    if ($raw === false) {
+        return 'Could not read uploaded image';
+    }
+    $src = @imagecreatefromstring($raw);
+    if ($src === false) {
+        return 'Unsupported image format (use PNG or JPEG)';
+    }
+
+    $W = 128;
+    $H = 64;
+    $sw = imagesx($src);
+    $sh = imagesy($src);
+    $scale = min($W / $sw, $H / $sh);
+    $dw = max(1, (int)round($sw * $scale));
+    $dh = max(1, (int)round($sh * $scale));
+
+    $canvas = imagecreatetruecolor($W, $H);
+    imagefilledrectangle($canvas, 0, 0, $W, $H, imagecolorallocate($canvas, 0, 0, 0));
+    imagecopyresampled($canvas, $src, (int)(($W - $dw) / 2), (int)(($H - $dh) / 2), 0, 0, $dw, $dh, $sw, $sh);
+    imagedestroy($src);
+
+    // Luminance buffer + Floyd-Steinberg dither to 1-bit.
+    $lum = [];
+    for ($y = 0; $y < $H; $y++) {
+        for ($x = 0; $x < $W; $x++) {
+            $rgb = imagecolorat($canvas, $x, $y);
+            $lum[$y][$x] = 0.2126 * (($rgb >> 16) & 0xFF) + 0.7152 * (($rgb >> 8) & 0xFF) + 0.0722 * ($rgb & 0xFF);
+        }
+    }
+    $bits = [];
+    for ($y = 0; $y < $H; $y++) {
+        for ($x = 0; $x < $W; $x++) {
+            $old = $lum[$y][$x];
+            $new = $old < 128 ? 0 : 255;
+            $bits[$y][$x] = $new === 255 ? 1 : 0;
+            $err = $old - $new;
+            if ($x + 1 < $W)                 $lum[$y][$x + 1]     += $err * 7 / 16;
+            if ($y + 1 < $H && $x > 0)       $lum[$y + 1][$x - 1] += $err * 3 / 16;
+            if ($y + 1 < $H)                 $lum[$y + 1][$x]     += $err * 5 / 16;
+            if ($y + 1 < $H && $x + 1 < $W)  $lum[$y + 1][$x + 1] += $err * 1 / 16;
+        }
+    }
+
+    // Pack rows MSB-first, 16 bytes per row.
+    $rows = [];
+    for ($y = 0; $y < $H; $y++) {
+        $bytes = [];
+        for ($bx = 0; $bx < 16; $bx++) {
+            $b = 0;
+            for ($bit = 0; $bit < 8; $bit++) {
+                $b = ($b << 1) | $bits[$y][$bx * 8 + $bit];
+            }
+            $bytes[] = sprintf('B%08b', $b);
+        }
+        $rows[] = '  ' . implode(', ', $bytes);
+    }
+
+    $header = "/**\n * Custom bootscreen generated by HotFetched " . HF_VERSION . "\n */\n"
+        . "#pragma once\n\n"
+        . "#define CUSTOM_BOOTSCREEN_TIMEOUT 2500\n"
+        . "#define CUSTOM_BOOTSCREEN_BMPWIDTH {$W}\n\n"
+        . "const unsigned char custom_start_bmp[] PROGMEM = {\n"
+        . implode(",\n", $rows) . "\n};\n";
+
+    // Preview: 3x upscaled PNG of the dithered result.
+    $pv = imagecreatetruecolor($W * 3, $H * 3);
+    $on  = imagecolorallocate($pv, 230, 235, 242);
+    $off = imagecolorallocate($pv, 14, 17, 22);
+    for ($y = 0; $y < $H; $y++) {
+        for ($x = 0; $x < $W; $x++) {
+            imagefilledrectangle($pv, $x * 3, $y * 3, $x * 3 + 2, $y * 3 + 2, $bits[$y][$x] ? $on : $off);
+        }
+    }
+    ob_start();
+    imagepng($pv);
+    $png = ob_get_clean();
+    imagedestroy($pv);
+    imagedestroy($canvas);
+
+    return ['header' => $header, 'preview_b64' => base64_encode($png)];
+}
