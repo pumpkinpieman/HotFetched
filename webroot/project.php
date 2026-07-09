@@ -429,6 +429,93 @@ function rtttlToSeq(text) {
     return seq.length ? seq : null;
 }
 
+/* Standard MIDI file -> [[freq,ms],...] — monophonic melody reduction.
+   Reads all tracks, keeps the highest note sounding at any time, honors
+   set-tempo events, inserts rests for gaps, caps at 64 tones. */
+function midiToSeq(buf) {
+    const d = new DataView(buf);
+    if (d.getUint32(0) !== 0x4D546864) return null; // 'MThd'
+    const division = d.getUint16(12);
+    if (division & 0x8000) return null; // SMPTE timing unsupported
+    let pos = 14;
+    const events = []; // {tick, type:'on'|'off'|'tempo', note, usPerQN}
+    while (pos + 8 <= d.byteLength) {
+        if (d.getUint32(pos) !== 0x4D54726B) break; // 'MTrk'
+        const len = d.getUint32(pos + 4);
+        let p = pos + 8;
+        const end = p + len;
+        let tick = 0;
+        let running = 0;
+        while (p < end) {
+            let delta = 0, b;
+            do { b = d.getUint8(p++); delta = (delta << 7) | (b & 0x7F); } while (b & 0x80);
+            tick += delta;
+            let status = d.getUint8(p);
+            if (status & 0x80) { p++; running = status; } else { status = running; }
+            const type = status & 0xF0;
+            if (type === 0x90 || type === 0x80) {
+                const note = d.getUint8(p++);
+                const vel = d.getUint8(p++);
+                if (type === 0x90 && vel > 0) events.push({ tick, type: 'on', note });
+                else events.push({ tick, type: 'off', note });
+            } else if (status === 0xFF) {
+                const meta = d.getUint8(p++);
+                let mlen = 0;
+                do { b = d.getUint8(p++); mlen = (mlen << 7) | (b & 0x7F); } while (b & 0x80);
+                if (meta === 0x51 && mlen === 3) {
+                    events.push({ tick, type: 'tempo',
+                        usPerQN: (d.getUint8(p) << 16) | (d.getUint8(p + 1) << 8) | d.getUint8(p + 2) });
+                }
+                p += mlen;
+            } else if (type === 0xC0 || type === 0xD0) { p += 1; }
+            else if (status === 0xF0 || status === 0xF7) {
+                let slen = 0;
+                do { b = d.getUint8(p++); slen = (slen << 7) | (b & 0x7F); } while (b & 0x80);
+                p += slen;
+            } else { p += 2; }
+        }
+        pos = end;
+    }
+    if (!events.length) return null;
+    events.sort((a, b2) => a.tick - b2.tick);
+
+    let usPerQN = 500000;
+    const held = new Set();
+    const seq = [];
+    let lastTick = 0;
+    let lastUs = 0;
+    const tickToUs = (dt) => dt * usPerQN / division;
+    let curNote = null;
+    let curStartUs = 0;
+
+    const emit = (untilUs) => {
+        const durMs = Math.round((untilUs - curStartUs) / 1000);
+        if (durMs < 15) return;
+        if (curNote === null) seq.push([0, Math.min(durMs, 3000)]);
+        else seq.push([Math.round(440 * Math.pow(2, (curNote - 69) / 12)), Math.min(durMs, 3000)]);
+    };
+
+    for (const ev of events) {
+        const nowUs = lastUs + tickToUs(ev.tick - lastTick);
+        lastTick = ev.tick;
+        lastUs = nowUs;
+        if (ev.type === 'tempo') { usPerQN = ev.usPerQN; continue; }
+        if (ev.type === 'on') held.add(ev.note);
+        else held.delete(ev.note);
+        const top = held.size ? Math.max(...held) : null;
+        if (top !== curNote) {
+            emit(nowUs);
+            curNote = top;
+            curStartUs = nowUs;
+        }
+        if (seq.length >= 64) break;
+    }
+    emit(lastUs);
+    while (seq.length && seq[0][0] === 0) seq.shift();
+    while (seq.length && seq[seq.length - 1][0] === 0) seq.pop();
+    return seq.length ? seq.slice(0, 64) : null;
+}
+
 function m300Lines(seq) {
     if (!seq.length) return '; (no sound)';
     return seq.map(([f, p]) => f === 0 ? `G4 P${p}` : `M300 S${f} P${p}`).join('\n');
@@ -478,6 +565,10 @@ function sndRender() {
     const ta = document.createElement('textarea');
     ta.className = 'snd-import';
     ta.placeholder = 'Beep:d=8,o=5,b=120:c,e,g  \u2014 or \u2014  523,120,0,40,784,180';
+    const fileIn = document.createElement('input');
+    fileIn.type = 'file';
+    fileIn.accept = '.mid,.midi,.rtttl,.txt';
+    let midiSeq = null;
     const target = document.createElement('select');
     for (const [k, lbl] of [['startup', 'Power-on tune (firmware)'], ...events]) {
         const o = document.createElement('option');
@@ -498,10 +589,33 @@ function sndRender() {
     const impMsg = document.createElement('span');
     impMsg.className = 'msg';
     const parseImport = () => {
+        if (midiSeq) return midiSeq;
         const txt = ta.value.trim();
         if (!txt) return null;
         return txt.includes(':') ? rtttlToSeq(txt) : (csvToSeq(txt).length ? csvToSeq(txt) : null);
     };
+    fileIn.addEventListener('change', () => {
+        midiSeq = null;
+        impMsg.textContent = '';
+        const f = fileIn.files[0];
+        if (!f) return;
+        const isMidi = /\.midi?$/i.test(f.name);
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (isMidi) {
+                midiSeq = midiToSeq(reader.result);
+                impMsg.textContent = midiSeq
+                    ? 'MIDI parsed: ' + midiSeq.length + ' tones \u2014 Preview, then Apply'
+                    : 'Could not parse MIDI file';
+            } else {
+                ta.value = String(reader.result).trim();
+                impMsg.textContent = 'File loaded \u2014 Preview, then Apply';
+            }
+        };
+        if (isMidi) reader.readAsArrayBuffer(f);
+        else reader.readAsText(f);
+    });
+    ta.addEventListener('input', () => { midiSeq = null; if (fileIn.value) fileIn.value = ''; });
     tryBtn.addEventListener('click', () => {
         const seq = parseImport();
         if (seq) playSeq(seq);
@@ -525,7 +639,7 @@ function sndRender() {
         cfgExtrasVisibility();
     });
     row2.append(tryBtn, applyBtn, impMsg);
-    imp.append(ta, target, row2);
+    imp.append(ta, fileIn, target, row2);
     box.appendChild(imp);
 }
 
