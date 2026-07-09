@@ -6,7 +6,6 @@ private/
 
 # Secrets
 .env
-config.php
 
 # Logs / OS noise
 *.log
