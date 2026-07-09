@@ -144,3 +144,17 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     color: var(--muted);
 }
 .prog-text span:first-child { color: var(--ink); font-weight: 600; }
+
+/* Configuration editor */
+.cfg-group {
+    margin: 18px 0 10px;
+    font-size: 13px;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+}
+.cfg-err { color: var(--bad); font-size: 12px; min-height: 14px; }
+.cfg-bool { flex-direction: row; align-items: center; gap: 10px; }
+.cfg-bool input { width: 18px; height: 18px; accent-color: var(--accent); }

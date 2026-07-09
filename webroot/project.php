@@ -112,11 +112,22 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
         <span class="msg" id="srcMsg"></span>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="cfgPanel">
         <h2>Configuration</h2>
-        <p class="empty"><?= $project['source_state'] === 'ready'
-            ? 'Configuration editor ships in the next phase.'
-            : 'Configuration editor unlocks once a firmware source is imported.' ?></p>
+        <?php if ($project['source_state'] !== 'ready'): ?>
+            <p class="empty">Configuration editor unlocks once a firmware source is imported.</p>
+        <?php elseif ($fwKey !== 'marlin'): ?>
+            <p class="empty">Klipper configuration generation ships in a later phase.</p>
+        <?php else: ?>
+            <p class="empty" id="cfgLoading">Loading configuration&hellip;</p>
+            <form id="cfgForm" hidden>
+                <div id="cfgGroups"></div>
+                <div class="actions">
+                    <button type="submit" class="btn primary">Submit Configuration</button>
+                    <span class="msg" id="cfgMsg"></span>
+                </div>
+            </form>
+        <?php endif; ?>
     </section>
 
     <section class="panel">
@@ -278,6 +289,138 @@ el('srcResetBtn')?.addEventListener('click', async () => {
 
 if (<?= json_encode($project['source_state'] === 'fetching') ?>) {
     startPolling();
+}
+
+/* ---------------------------- Configuration editor ---------------------- */
+
+const cfgForm = el('cfgForm');
+let CFG_FIELDS = [];
+
+async function cfgApi(payload) {
+    const r = await fetch('api/config.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, csrf: CSRF, id: PROJECT_ID })
+    });
+    let data;
+    try { data = await r.json(); } catch { data = { ok: false, error: 'Bad response' }; }
+    return data;
+}
+
+function cfgVisible(f, values) {
+    if (!f.requires) return true;
+    return Object.entries(f.requires).every(([k, v]) => String(values[k] ?? '') === String(v));
+}
+
+function cfgCollect() {
+    const values = {};
+    for (const f of CFG_FIELDS) {
+        const input = document.getElementById('cf_' + f.key);
+        if (!input) continue;
+        values[f.key] = f.type === 'bool' ? (input.checked ? '1' : '0') : input.value;
+    }
+    return values;
+}
+
+function cfgApplyVisibility() {
+    const values = cfgCollect();
+    for (const f of CFG_FIELDS) {
+        const wrap = document.getElementById('cfw_' + f.key);
+        if (wrap) wrap.hidden = !cfgVisible(f, values);
+    }
+}
+
+function cfgRender(fields, values) {
+    CFG_FIELDS = fields;
+    const groups = {};
+    for (const f of fields) (groups[f.group] ??= []).push(f);
+
+    const root = el('cfgGroups');
+    root.innerHTML = '';
+    for (const [group, fs] of Object.entries(groups)) {
+        const h = document.createElement('h3');
+        h.className = 'cfg-group';
+        h.textContent = group;
+        root.appendChild(h);
+
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        for (const f of fs) {
+            const wrap = document.createElement('label');
+            wrap.id = 'cfw_' + f.key;
+
+            const cap = document.createElement('span');
+            cap.textContent = f.label + (f.type === 'int' && f.min !== undefined ? ` (${f.min}\u2013${f.max})` : '');
+            wrap.appendChild(cap);
+
+            let input;
+            if (f.type === 'select') {
+                input = document.createElement('select');
+                for (const o of f.options) {
+                    const opt = document.createElement('option');
+                    opt.value = o;
+                    opt.textContent = o;
+                    input.appendChild(opt);
+                }
+                if (values[f.key] !== null && values[f.key] !== undefined) input.value = values[f.key];
+            } else if (f.type === 'bool') {
+                input = document.createElement('input');
+                input.type = 'checkbox';
+                input.checked = values[f.key] === '1';
+                wrap.classList.add('cfg-bool');
+            } else {
+                input = document.createElement('input');
+                input.type = f.type === 'int' ? 'number' : 'text';
+                if (f.type === 'int') {
+                    if (f.min !== undefined) input.min = f.min;
+                    if (f.max !== undefined) input.max = f.max;
+                }
+                if (f.maxlen) input.maxLength = f.maxlen;
+                input.value = values[f.key] ?? '';
+            }
+            input.id = 'cf_' + f.key;
+            input.required = f.type !== 'bool';
+            input.addEventListener('change', cfgApplyVisibility);
+            wrap.appendChild(input);
+
+            const err = document.createElement('span');
+            err.className = 'cfg-err';
+            err.id = 'cfe_' + f.key;
+            wrap.appendChild(err);
+
+            grid.appendChild(wrap);
+        }
+        root.appendChild(grid);
+    }
+    cfgApplyVisibility();
+    el('cfgLoading').hidden = true;
+    cfgForm.hidden = false;
+}
+
+if (cfgForm) {
+    (async () => {
+        const res = await cfgApi({ action: 'get' });
+        if (res.ok) cfgRender(res.fields, res.values);
+        else el('cfgLoading').textContent = res.error || 'Failed to load configuration';
+    })();
+
+    cfgForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.cfg-err').forEach(s => s.textContent = '');
+        el('cfgMsg').textContent = 'Applying\u2026';
+        const res = await cfgApi({ action: 'save', values: cfgCollect() });
+        if (res.ok) {
+            el('cfgMsg').textContent = 'Applied ' + res.applied.length + ' defines to Configuration.h \u2713';
+        } else if (res.field_errors) {
+            el('cfgMsg').textContent = 'Fix the highlighted fields';
+            for (const [k, msg] of Object.entries(res.field_errors)) {
+                const s = document.getElementById('cfe_' + k);
+                if (s) s.textContent = msg;
+            }
+        } else {
+            el('cfgMsg').textContent = res.error || 'Save failed';
+        }
+    });
 }
 </script>
 </body>

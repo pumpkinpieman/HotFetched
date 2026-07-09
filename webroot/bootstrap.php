@@ -467,3 +467,275 @@ function source_dir_reset(int $id): void
     }
     @rmdir($real);
 }
+
+/* ------------------------------------------------- Marlin config engine */
+
+/**
+ * Parse a Marlin configuration header into an editable document.
+ * Returns ['lines' => string[], 'defines' => [KEY => ['line' => int,
+ * 'enabled' => bool, 'value' => ?string]]]. When a key appears more than
+ * once, an enabled occurrence wins over a commented one.
+ */
+function marlin_config_parse(string $path): ?array
+{
+    $raw = @file_get_contents($path);
+    if ($raw === false) {
+        return null;
+    }
+    $lines = preg_split("/\r\n|\n|\r/", $raw);
+    $defines = [];
+
+    foreach ($lines as $i => $line) {
+        if (!preg_match('#^(\s*)(//)?\s*\#define\s+([A-Za-z_]\w*)(\s+(.*))?$#', $line, $m)) {
+            continue;
+        }
+        $key     = $m[3];
+        $enabled = ($m[2] ?? '') !== '//';
+        [$value, ] = marlin_split_value_comment($m[5] ?? '');
+        $entry = ['line' => $i, 'enabled' => $enabled, 'value' => $value === '' ? null : $value];
+
+        if (!isset($defines[$key]) || (!$defines[$key]['enabled'] && $enabled)) {
+            $defines[$key] = $entry;
+        }
+    }
+    return ['lines' => $lines, 'defines' => $defines];
+}
+
+/**
+ * Split a define's remainder into [value, trailingComment], respecting
+ * string literals and brace/paren nesting so "//" inside them is kept.
+ */
+function marlin_split_value_comment(string $rest): array
+{
+    $rest = rtrim($rest);
+    $inStr = false;
+    $depth = 0;
+    $len = strlen($rest);
+    for ($i = 0; $i < $len - 1; $i++) {
+        $ch = $rest[$i];
+        if ($ch === '"' && ($i === 0 || $rest[$i - 1] !== '\\')) {
+            $inStr = !$inStr;
+        } elseif (!$inStr) {
+            if ($ch === '{' || $ch === '(') $depth++;
+            elseif ($ch === '}' || $ch === ')') $depth--;
+            elseif ($ch === '/' && $rest[$i + 1] === '/' && $depth <= 0) {
+                return [rtrim(substr($rest, 0, $i)), substr($rest, $i)];
+            }
+        }
+    }
+    return [$rest, ''];
+}
+
+/**
+ * Set/enable/disable a define in a parsed document (surgical: only the
+ * one line is rewritten; indentation and trailing comment are preserved).
+ * Returns false if the key is not present in the file.
+ */
+function marlin_config_set(array &$doc, string $key, ?string $value, bool $enable = true): bool
+{
+    if (!isset($doc['defines'][$key])) {
+        return false;
+    }
+    $idx  = $doc['defines'][$key]['line'];
+    $line = $doc['lines'][$idx];
+
+    if (!preg_match('#^(\s*)(//)?\s*\#define\s+([A-Za-z_]\w*)(\s+(.*))?$#', $line, $m)) {
+        return false;
+    }
+    $indent = $m[1];
+    [, $comment] = marlin_split_value_comment($m[5] ?? '');
+
+    $new = $indent . ($enable ? '' : '//') . '#define ' . $key;
+    if ($value !== null && $value !== '') {
+        $new .= ' ' . $value;
+    }
+    if ($comment !== '') {
+        $new .= '  ' . $comment;
+    }
+    $doc['lines'][$idx] = $new;
+    $doc['defines'][$key]['enabled'] = $enable;
+    $doc['defines'][$key]['value']   = $value;
+    return true;
+}
+
+function marlin_config_write(array $doc, string $path): bool
+{
+    return @file_put_contents($path, implode("\n", $doc['lines'])) !== false;
+}
+
+/** Pull the N numeric magnitudes out of an array/expression value. */
+function marlin_extract_numbers(?string $value, int $count): array
+{
+    if ($value === null) {
+        return array_fill(0, $count, null);
+    }
+    preg_match_all('/-?\d+(?:\.\d+)?/', $value, $m);
+    $nums = array_map('floatval', $m[0]);
+    return array_pad(array_slice($nums, 0, $count), $count, null);
+}
+
+/**
+ * Curated editable fields for a Marlin project, validated against the
+ * board definition. Each: key, label, group, type, and constraints.
+ * type: text | int | select | bool
+ */
+function marlin_field_defs(array $board): array
+{
+    $lim     = $board['limits'];
+    $drivers = $board['marlin']['valid_drivers'];
+
+    return [
+        ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine',
+         'type' => 'text', 'maxlen' => 40],
+
+        ['key' => 'driver_x',  'label' => 'X stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
+        ['key' => 'driver_y',  'label' => 'Y stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
+        ['key' => 'driver_z',  'label' => 'Z stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
+        ['key' => 'driver_e0', 'label' => 'E0 stepper driver', 'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
+        ['key' => 'driver_e1', 'label' => 'E1 stepper driver', 'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers,
+         'requires' => ['extruders' => '2']],
+
+        ['key' => 'extruders',    'label' => 'Extruders', 'group' => 'Extruder', 'type' => 'select', 'options' => ['1', '2']],
+        ['key' => 'singlenozzle', 'label' => 'Dual extruder, single nozzle (SINGLENOZZLE)', 'group' => 'Extruder', 'type' => 'bool',
+         'requires' => ['extruders' => '2']],
+
+        ['key' => 'bed_x',  'label' => 'Bed size X (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_x']],
+        ['key' => 'bed_y',  'label' => 'Bed size Y (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_y']],
+        ['key' => 'z_max',  'label' => 'Z height (mm)',   'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_z']],
+
+        ['key' => 'feed_x', 'label' => 'Max feedrate X (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 10, 'max' => (int)$lim['max_feedrate_xy']],
+        ['key' => 'feed_y', 'label' => 'Max feedrate Y (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 10, 'max' => (int)$lim['max_feedrate_xy']],
+        ['key' => 'feed_z', 'label' => 'Max feedrate Z (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 1,  'max' => (int)$lim['max_feedrate_z']],
+        ['key' => 'feed_e', 'label' => 'Max feedrate E (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 5,  'max' => 120],
+        ['key' => 'homing_xy', 'label' => 'Homing speed XY (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 5, 'max' => 150],
+        ['key' => 'homing_z',  'label' => 'Homing speed Z (mm/s)',  'group' => 'Speed', 'type' => 'int', 'min' => 1, 'max' => 30],
+
+        ['key' => 'hotend_maxtemp', 'label' => 'Nozzle max temp (°C)', 'group' => 'Thermal', 'type' => 'int', 'min' => 150, 'max' => (int)$lim['max_hotend_temp']],
+        ['key' => 'bed_maxtemp',    'label' => 'Bed max temp (°C)',    'group' => 'Thermal', 'type' => 'int', 'min' => 60,  'max' => (int)$lim['max_bed_temp']],
+        ['key' => 'temp_sensor_0',   'label' => 'Hotend temp sensor (TEMP_SENSOR_0)',  'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
+        ['key' => 'temp_sensor_bed', 'label' => 'Bed temp sensor (TEMP_SENSOR_BED)',   'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
+    ];
+}
+
+/**
+ * Read current values for all curated fields out of a parsed
+ * Configuration.h document.
+ */
+function marlin_current_values(array $doc): array
+{
+    $d = $doc['defines'];
+    $get = fn (string $k) => $d[$k] ?? null;
+
+    $strip = function (?array $e): ?string {
+        if ($e === null || $e['value'] === null) return null;
+        return trim((string)$e['value'], "\" \t");
+    };
+    $num = function (?array $e): ?string {
+        if ($e === null || $e['value'] === null) return null;
+        return preg_match('/-?\d+/', (string)$e['value'], $m) ? $m[0] : null;
+    };
+    $driver = function (?array $e): ?string {
+        if ($e === null || $e['value'] === null || !$e['enabled']) return null;
+        return trim((string)$e['value']);
+    };
+
+    [$fx, $fy, $fz, $fe] = marlin_extract_numbers($get('DEFAULT_MAX_FEEDRATE')['value'] ?? null, 4);
+
+    // HOMING_FEEDRATE_MM_M is mm/min, typically as (N*60) — normalize to mm/s.
+    $homing = $get('HOMING_FEEDRATE_MM_M')['value'] ?? null;
+    $hxy = $hz = null;
+    if ($homing !== null) {
+        if (preg_match_all('/\((\d+)\s*\*\s*60\)/', $homing, $m) && count($m[1]) >= 3) {
+            $hxy = $m[1][0];
+            $hz  = $m[1][2];
+        } else {
+            [$a, , $c] = marlin_extract_numbers($homing, 3);
+            $hxy = $a !== null ? (string)(int)round($a / 60) : null;
+            $hz  = $c !== null ? (string)(int)round($c / 60) : null;
+        }
+    }
+
+    $mn = $get('CUSTOM_MACHINE_NAME');
+
+    return [
+        'machine_name' => $mn !== null && $mn['enabled'] ? $strip($mn) : null,
+        'driver_x'  => $driver($get('X_DRIVER_TYPE')),
+        'driver_y'  => $driver($get('Y_DRIVER_TYPE')),
+        'driver_z'  => $driver($get('Z_DRIVER_TYPE')),
+        'driver_e0' => $driver($get('E0_DRIVER_TYPE')),
+        'driver_e1' => $driver($get('E1_DRIVER_TYPE')),
+        'extruders'    => $num($get('EXTRUDERS')),
+        'singlenozzle' => ($get('SINGLENOZZLE')['enabled'] ?? false) ? '1' : '0',
+        'bed_x' => $num($get('X_BED_SIZE')),
+        'bed_y' => $num($get('Y_BED_SIZE')),
+        'z_max' => $num($get('Z_MAX_POS')),
+        'feed_x' => $fx !== null ? (string)(int)$fx : null,
+        'feed_y' => $fy !== null ? (string)(int)$fy : null,
+        'feed_z' => $fz !== null ? (string)(int)$fz : null,
+        'feed_e' => $fe !== null ? (string)(int)$fe : null,
+        'homing_xy' => $hxy,
+        'homing_z'  => $hz,
+        'hotend_maxtemp'  => $num($get('HEATER_0_MAXTEMP')),
+        'bed_maxtemp'     => $num($get('BED_MAXTEMP')),
+        'temp_sensor_0'   => $num($get('TEMP_SENSOR_0')),
+        'temp_sensor_bed' => $num($get('TEMP_SENSOR_BED')),
+    ];
+}
+
+/**
+ * Apply validated field values to a parsed Configuration.h document,
+ * including board-locked defines (MOTHERBOARD, SERIAL_PORT).
+ * Returns list of applied define names.
+ */
+function marlin_apply_values(array &$doc, array $v, array $board): array
+{
+    $applied = [];
+    $set = function (string $key, ?string $value, bool $enable = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $key, $value, $enable)) {
+            $applied[] = $key;
+        }
+    };
+
+    // Board-locked
+    $set('MOTHERBOARD', (string)$board['marlin']['motherboard']);
+    $set('SERIAL_PORT', (string)($board['marlin']['serial_ports'][0] ?? 1));
+
+    // Machine
+    $name = str_replace('"', '', (string)$v['machine_name']);
+    $set('CUSTOM_MACHINE_NAME', '"' . $name . '"');
+
+    // Drivers
+    $set('X_DRIVER_TYPE',  (string)$v['driver_x']);
+    $set('Y_DRIVER_TYPE',  (string)$v['driver_y']);
+    $set('Z_DRIVER_TYPE',  (string)$v['driver_z']);
+    $set('E0_DRIVER_TYPE', (string)$v['driver_e0']);
+
+    $dual = ($v['extruders'] === '2');
+    $set('EXTRUDERS', $dual ? '2' : '1');
+    if ($dual) {
+        $set('E1_DRIVER_TYPE', (string)$v['driver_e1']);
+        $set('SINGLENOZZLE', null, $v['singlenozzle'] === '1');
+    } else {
+        $set('E1_DRIVER_TYPE', $doc['defines']['E1_DRIVER_TYPE']['value'] ?? 'A4988', false);
+        $set('SINGLENOZZLE', null, false);
+    }
+
+    // Geometry
+    $set('X_BED_SIZE', (string)(int)$v['bed_x']);
+    $set('Y_BED_SIZE', (string)(int)$v['bed_y']);
+    $set('Z_MAX_POS',  (string)(int)$v['z_max']);
+
+    // Speed
+    $set('DEFAULT_MAX_FEEDRATE', sprintf('{ %d, %d, %d, %d }',
+        (int)$v['feed_x'], (int)$v['feed_y'], (int)$v['feed_z'], (int)$v['feed_e']));
+    $set('HOMING_FEEDRATE_MM_M', sprintf('{ (%d*60), (%d*60), (%d*60) }',
+        (int)$v['homing_xy'], (int)$v['homing_xy'], (int)$v['homing_z']));
+
+    // Thermal
+    $set('HEATER_0_MAXTEMP', (string)(int)$v['hotend_maxtemp']);
+    $set('BED_MAXTEMP',      (string)(int)$v['bed_maxtemp']);
+    $set('TEMP_SENSOR_0',    (string)(int)$v['temp_sensor_0']);
+    $set('TEMP_SENSOR_BED',  (string)(int)$v['temp_sensor_bed']);
+
+    return $applied;
+}
