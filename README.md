@@ -49,6 +49,7 @@ with live preview.
 | FYSETC S6 V2.0 (F446) | STM32F446VE | yes | yes | 2.1 |
 | FYSETC Spider (F446) | STM32F446VE | yes | yes | 2.0.9.2 |
 | RAMPS 1.4 (Arduino Mega / ATmega2560) | ATmega2560 | yes | yes | 1.1.9 |
+| LDO Leviathan V1.2 (Voron, F446) | STM32F446 | — | yes | — |
 | MKS Monster8 V2 (F407) | STM32F407VE | yes | yes | 2.1 |
 | MKS Robin Nano V3 (F407) | STM32F407VG | yes | yes | 2.0.9.3 |
 | MKS Robin Nano V3.1 (F407) | STM32F407VE | yes | yes | 2.1 |
