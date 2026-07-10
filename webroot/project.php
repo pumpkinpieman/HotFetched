@@ -344,7 +344,10 @@ async function cfgApi(payload) {
 
 function cfgVisible(f, values) {
     if (!f.requires) return true;
-    return Object.entries(f.requires).every(([k, v]) => String(values[k] ?? '') === String(v));
+    return Object.entries(f.requires).every(([k, v]) => {
+        const want = Array.isArray(v) ? v.map(String) : [String(v)];
+        return want.includes(String(values[k] ?? ''));
+    });
 }
 
 function cfgCollect() {
@@ -368,6 +371,14 @@ function cfgApplyVisibility() {
         // Hidden controls must be disabled too: a hidden+required+empty input
         // blocks HTML5 form submission ("not focusable") and shouldn't validate.
         if (input) input.disabled = hide;
+        // Overridable ceilings: relax the browser-side max + hint live.
+        if (input && f.override_key && f.override_max !== undefined) {
+            const over = String(values[f.override_key] ?? '') === '1';
+            const max = over ? f.override_max : f.max;
+            input.max = max;
+            const cap = wrap.querySelector('span');
+            if (cap) cap.textContent = f.label + ` (${f.min}\u2013${max})`;
+        }
     }
 }
 
@@ -1052,6 +1063,7 @@ function cfgRender(fields, values, meta) {
                 input.type = 'checkbox';
                 input.checked = values[f.key] === '1';
                 wrap.classList.add('cfg-bool');
+                if (f.warning_text) wrap.classList.add('cfg-danger');
             } else {
                 input = document.createElement('input');
                 input.type = (f.type === 'int' || f.type === 'float') ? 'number' : 'text';
@@ -1067,6 +1079,13 @@ function cfgRender(fields, values, meta) {
             input.required = f.type !== 'bool';
             input.addEventListener('change', () => { cfgApplyVisibility(); cfgExtrasVisibility(); });
             wrap.appendChild(input);
+
+            if (f.warning_text) {
+                const warn = document.createElement('span');
+                warn.className = 'cfg-warning';
+                warn.textContent = f.warning_text;
+                wrap.appendChild(warn);
+            }
 
             const err = document.createElement('span');
             err.className = 'cfg-err';
