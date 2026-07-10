@@ -798,7 +798,7 @@ function marlin_field_defs_extended(array $board): array
         ['key' => 'startup_tune', 'label' => 'Power-on tune (STARTUP_TUNE)', 'group' => 'Audio',
          'type' => 'select', 'options' => $tuneOpts, 'option_labels' => $tuneLabels],
         ['key' => 'startup_tune_custom', 'label' => 'Custom tune (freq,ms pairs e.g. 523,120,0,40,784,180)', 'group' => 'Audio',
-         'type' => 'text', 'maxlen' => 200, 'requires' => ['startup_tune' => ['custom']]],
+         'type' => 'text', 'maxlen' => 2000, 'requires' => ['startup_tune' => ['custom']]],
     ];
 
     foreach ([
@@ -811,7 +811,7 @@ function marlin_field_defs_extended(array $board): array
         $fields[] = ['key' => $key, 'label' => $label, 'group' => 'Audio (host events)',
                      'type' => 'select', 'options' => $evOpts];
         $fields[] = ['key' => $key . '_custom', 'label' => $label . ' — custom (freq,ms pairs)',
-                     'group' => 'Audio (host events)', 'type' => 'text', 'maxlen' => 400,
+                     'group' => 'Audio (host events)', 'type' => 'text', 'maxlen' => 2000,
                      'requires' => [$key => ['custom']]];
     }
     return $fields;

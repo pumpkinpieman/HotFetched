@@ -87,7 +87,7 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Submit the Configuration form before building'], 409);
         }
 
-        db()->prepare('INSERT INTO builds (project_id) VALUES (?)')->execute([$pid]);
+        db()->prepare("INSERT INTO builds (project_id, started_at) VALUES (?, datetime('now'))")->execute([$pid]);
         $buildId = (int)db()->lastInsertId();
 
         $php = '/usr/local/bin/php';
@@ -113,12 +113,15 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Build not found'], 404);
         }
 
-        // Stall watchdog: active build with a silent log for 15 minutes.
+        // Stall watchdog: queued with no worker signs for 3 minutes, or an
+        // active build with a silent log for 15 minutes.
         if (in_array($b['status'], ['queued', 'validating', 'building'], true)) {
-            $ref = is_string($b['log_path']) && is_file($b['log_path'])
+            $hasLog = is_string($b['log_path']) && is_file($b['log_path']);
+            $ref = $hasLog
                 ? (int)filemtime($b['log_path'])
-                : strtotime((string)($b['started_at'] ?? $b['finished_at'] ?? 'now') . ' UTC');
-            if ($ref !== false && time() - $ref > 900) {
+                : ($b['started_at'] !== null ? strtotime((string)$b['started_at'] . ' UTC') : 0);
+            $limit = (!$hasLog && $b['status'] === 'queued') ? 180 : 900;
+            if ($ref !== false && $ref > 0 && time() - $ref > $limit) {
                 db()->prepare("UPDATE builds SET status = 'failed', finished_at = datetime('now') WHERE id = ? AND status IN ('queued','validating','building')")
                     ->execute([$id]);
                 $stmt->execute([$id]);

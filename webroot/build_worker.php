@@ -25,6 +25,28 @@ if ($buildId < 1) {
     exit(1);
 }
 
+// Fatal-error trap: never leave a build frozen if PHP dies mid-run.
+register_shutdown_function(function () use ($buildId): void {
+    $err = error_get_last();
+    if ($err === null || !in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        return;
+    }
+    try {
+        $pdo = db();
+        $stmt = $pdo->prepare("SELECT status, gate_json FROM builds WHERE id = ?");
+        $stmt->execute([$buildId]);
+        $row = $stmt->fetch();
+        if ($row && in_array($row['status'], ['queued', 'validating', 'building'], true)) {
+            $gates = json_decode((string)($row['gate_json'] ?? '[]'), true) ?: [];
+            $gates[] = ['id' => 'worker_fatal', 'label' => 'Build worker crashed', 'points' => 0,
+                        'pass' => false, 'detail' => $err['message'] . ' @ ' . basename($err['file']) . ':' . $err['line']];
+            $pdo->prepare("UPDATE builds SET status = 'failed', gate_json = ?, finished_at = datetime('now') WHERE id = ?")
+                ->execute([json_encode($gates), $buildId]);
+        }
+    } catch (Throwable) {
+    }
+});
+
 $stmt = db()->prepare('SELECT * FROM builds WHERE id = ?');
 $stmt->execute([$buildId]);
 $build = $stmt->fetch();
