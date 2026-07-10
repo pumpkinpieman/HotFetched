@@ -15,6 +15,7 @@ $boards = board_defs();
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HotFetched</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -33,17 +34,13 @@ $boards = board_defs();
                            pattern="[A-Za-z0-9][A-Za-z0-9 ._\-]{0,63}" placeholder="Ender3-SKR3-Klipper">
                 </label>
                 <label>Firmware
-                    <select name="firmware" required>
+                    <select name="firmware" id="fwSel" required>
                         <option value="marlin">Marlin</option>
                         <option value="klipper">Klipper</option>
                     </select>
                 </label>
                 <label>Motherboard
-                    <select name="board_id" id="boardSel" required>
-                        <?php foreach ($boards as $b): ?>
-                        <option value="<?= h($b['id']) ?>"><?= h($b['name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
+                    <select name="board_id" id="boardSel" required></select>
                 </label>
                 <label>MCU variant <span class="hint">(check the chip silkscreen)</span>
                     <select name="mcu_variant" id="mcuSel" required></select>
@@ -90,6 +87,28 @@ const BOARDS = <?= json_encode(array_values($boards), JSON_UNESCAPED_SLASHES) ?>
 
 const boardSel = document.getElementById('boardSel');
 const mcuSel   = document.getElementById('mcuSel');
+const fwSel    = document.getElementById('fwSel');
+
+function boardSupports(b, fw) {
+    const fs = b.firmware_support;
+    if (!fs) return true;
+    return !!fs[fw];
+}
+
+function fillBoards() {
+    const fw = fwSel.value;
+    const prev = boardSel.value;
+    boardSel.innerHTML = '';
+    const eligible = BOARDS.filter(b => boardSupports(b, fw));
+    for (const b of eligible) {
+        const o = document.createElement('option');
+        o.value = b.id;
+        o.textContent = b.name + (b.vendor && !b.name.includes(b.vendor) ? '' : '');
+        boardSel.appendChild(o);
+    }
+    if (eligible.some(b => b.id === prev)) boardSel.value = prev;
+    fillMcu();
+}
 
 function fillMcu() {
     const b = BOARDS.find(x => x.id === boardSel.value);
@@ -101,9 +120,22 @@ function fillMcu() {
         o.textContent = v.label;
         mcuSel.appendChild(o);
     }
+    const note = b.note ? b.note : '';
+    let noteEl = document.getElementById('boardNote');
+    if (!noteEl) {
+        noteEl = document.createElement('p');
+        noteEl.id = 'boardNote';
+        noteEl.className = 'hint';
+        noteEl.style.gridColumn = '1 / -1';
+        mcuSel.closest('.grid').appendChild(noteEl);
+    }
+    noteEl.textContent = note;
+    noteEl.style.display = note ? '' : 'none';
 }
+
 boardSel.addEventListener('change', fillMcu);
-fillMcu();
+fwSel.addEventListener('change', fillBoards);
+fillBoards();
 
 async function api(payload) {
     const r = await fetch('api/projects.php', {

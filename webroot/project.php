@@ -23,6 +23,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= h($project['name']) ?> — HotFetched</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>

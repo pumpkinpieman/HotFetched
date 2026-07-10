@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '1.0.0';
+const HF_VERSION = '1.1.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -189,6 +189,15 @@ function board_defs(): array
 function board_def(string $id): ?array
 {
     return board_defs()[$id] ?? null;
+}
+
+function board_supports(array $board, string $firmware): bool
+{
+    $fs = $board['firmware_support'] ?? null;
+    if (!is_array($fs)) {
+        return true; // legacy board, assume both
+    }
+    return (bool)($fs[$firmware] ?? false);
 }
 
 function board_mcu_variant(array $board, string $variantId): ?array
@@ -1442,8 +1451,8 @@ function klipper_generate_printer_cfg(string $refCfg, array $v): string
 function klipper_config_seed(array $board, array $variant): ?string
 {
     $seed = $board['klipper']['config_seed'] ?? null;
-    $mach = $variant['klipper_mach'] ?? null;
-    if (!is_array($seed) || !is_string($mach)) {
+    $mach = $variant['klipper_mach'] ?? ($board['klipper']['mach'] ?? null);
+    if (!is_array($seed) || !is_string($mach) || $mach === '') {
         return null;
     }
     $lines = array_map(fn ($l) => str_replace('{MACH}', $mach, $l), $seed);

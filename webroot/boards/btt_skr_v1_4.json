@@ -1,25 +1,20 @@
 {
-  "id": "btt_skr_v3_0",
-  "name": "BigTreeTech SKR 3",
+  "id": "btt_skr_v1_4",
+  "name": "BigTreeTech SKR 1.4 (LPC1768)",
   "vendor": "BigTreeTech",
   "mcu_variants": [
     {
-      "id": "STM32H743VI",
-      "label": "STM32H743VIT6 (480 MHz, 2 MB flash)",
-      "marlin_env": "STM32H743VI_btt",
-      "klipper_mcu": "stm32h743xx",
-      "klipper_mach": "CONFIG_MACH_STM32H743"
-    },
-    {
-      "id": "STM32H723VG",
-      "label": "STM32H723VGT6 (550 MHz, 1 MB flash)",
-      "marlin_env": "STM32H723VG_btt",
-      "klipper_mcu": "stm32h723xx",
-      "klipper_mach": "CONFIG_MACH_STM32H723"
+      "id": "LPC1768",
+      "label": "LPC1768 (100 MHz)",
+      "marlin_env": "LPC1768"
     }
   ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": false
+  },
   "marlin": {
-    "motherboard": "BOARD_BTT_SKR_V3_0",
+    "motherboard": "BOARD_BTT_SKR_V1_4",
     "serial_ports": [
       1,
       -1
@@ -37,8 +32,7 @@
       "TMC2130",
       "TMC5160",
       "A4988",
-      "DRV8825",
-      "LV8729"
+      "DRV8825"
     ],
     "onboard_uart_drivers": true,
     "max_extruders": 2,
@@ -132,32 +126,14 @@
       }
     ]
   },
-  "klipper": {
-    "reference_config": "generic-bigtreetech-skr-3.cfg",
-    "config_seed": [
-      "CONFIG_MACH_STM32=y",
-      "{MACH}=y",
-      "CONFIG_STM32_FLASH_START_20000=y",
-      "CONFIG_STM32_CLOCK_REF_25M=y",
-      "CONFIG_USBSERIAL=y"
-    ],
-    "kconfig": {
-      "FLASH_APPLICATION_ADDRESS": "0x8020000"
-    },
-    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (128KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32H743"
-  },
   "limits": {
-    "max_bed_x": 500,
-    "max_bed_y": 500,
-    "max_z": 600,
+    "max_bed_x": 400,
+    "max_bed_y": 400,
+    "max_z": 450,
     "max_hotend_temp": 350,
     "max_bed_temp": 130,
     "max_feedrate_xy": 500,
     "max_feedrate_z": 20
   },
-  "firmware_support": {
-    "marlin": true,
-    "klipper": true
-  }
+  "note": "LPC1768 board. Marlin builds via PlatformIO. Klipper on LPC176x needs a separate toolchain not yet bundled."
 }

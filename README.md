@@ -29,15 +29,27 @@ with live preview.
 
 ## Supported boards
 
-| Board | Marlin | Klipper |
-|---|---|---|
-| BigTreeTech SKR 3 (H743/H723) | yes | yes |
-| BigTreeTech SKR 3 EZ (H743/H723) | yes | yes |
-| BigTreeTech SKR Mini E3 V3.0 | yes | yes |
-| BigTreeTech Octopus V1.1 (F446) | yes | yes |
-| BigTreeTech Manta M8P V2.0 | yes | yes |
+| Board | MCU | Marlin | Klipper |
+|---|---|---|---|
+| BigTreeTech Manta M5P V1.0 (G0B1) | STM32G0B1RE | yes | yes |
+| BigTreeTech Manta M8P V2.0 | STM32H723ZE | yes | yes |
+| BigTreeTech Octopus Pro V1.1 (H723) | STM32H723ZE | yes | yes |
+| BigTreeTech Octopus V1.1 | STM32F446ZE | yes | yes |
+| BigTreeTech SKR 1.4 (LPC1768) | LPC1768 | yes | planned |
+| BigTreeTech SKR 1.4 Turbo (LPC1769) | LPC1769 | yes | planned |
+| BigTreeTech SKR 2.0 (F407) | STM32F407VG | yes | yes |
+| BigTreeTech SKR 3 | STM32H743VI, STM32H723VG | yes | yes |
+| BigTreeTech SKR 3 EZ | STM32H743VI, STM32H723VG | yes | yes |
+| BigTreeTech SKR Mini E3 V2.0 (F103) | STM32F103RC | yes | yes |
+| BigTreeTech SKR Mini E3 V3.0 | STM32G0B1RE | yes | yes |
+| BigTreeTech SKR Pico V1.0 (RP2040) | RP2040 | yes | planned |
+| Creality V4.2.2 (F103) | STM32F103RE | yes | yes |
+| Creality V4.2.7 (F103) | STM32F103RE | yes | yes |
+| FYSETC Spider (F446) | STM32F446VE | yes | yes |
+| MKS Robin Nano V3 (F407) | STM32F407VG | yes | yes |
+| RAMPS 1.4 (Arduino Mega / ATmega2560) | ATmega2560 | yes | planned |
 
-Boards are JSON under `webroot/boards/` — adding one is data, not code.
+Boards are JSON under `webroot/boards/` — adding one is data, not code. 17 boards ship in-box across BigTreeTech, Creality, FYSETC, Makerbase, and generic RAMPS.
 
 ## Run
 

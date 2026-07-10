@@ -31,6 +31,9 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Firmware must be marlin or klipper'], 422);
         }
         $board = board_def($boardId);
+        if ($board !== null && !board_supports($board, $firmware)) {
+            json_out(['ok' => false, 'error' => $board['name'] . ' does not support ' . ucfirst($firmware) . ' builds in this version'], 422);
+        }
         if ($board === null) {
             json_out(['ok' => false, 'error' => 'Unknown board'], 422);
         }

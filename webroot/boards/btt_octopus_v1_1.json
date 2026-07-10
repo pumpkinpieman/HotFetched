@@ -136,7 +136,8 @@
     "kconfig": {
       "FLASH_APPLICATION_ADDRESS": "0x8008000"
     },
-    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (32KiB bootloader)."
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (32KiB bootloader).",
+    "mach": "CONFIG_MACH_STM32F446"
   },
   "limits": {
     "max_bed_x": 600,
@@ -146,5 +147,9 @@
     "max_bed_temp": 130,
     "max_feedrate_xy": 800,
     "max_feedrate_z": 30
+  },
+  "firmware_support": {
+    "marlin": true,
+    "klipper": true
   }
 }

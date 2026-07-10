@@ -1,25 +1,22 @@
 {
-  "id": "btt_skr_v3_0",
-  "name": "BigTreeTech SKR 3",
-  "vendor": "BigTreeTech",
+  "id": "mks_robin_nano_v3",
+  "name": "MKS Robin Nano V3 (F407)",
+  "vendor": "Makerbase",
   "mcu_variants": [
     {
-      "id": "STM32H743VI",
-      "label": "STM32H743VIT6 (480 MHz, 2 MB flash)",
-      "marlin_env": "STM32H743VI_btt",
-      "klipper_mcu": "stm32h743xx",
-      "klipper_mach": "CONFIG_MACH_STM32H743"
-    },
-    {
-      "id": "STM32H723VG",
-      "label": "STM32H723VGT6 (550 MHz, 1 MB flash)",
-      "marlin_env": "STM32H723VG_btt",
-      "klipper_mcu": "stm32h723xx",
-      "klipper_mach": "CONFIG_MACH_STM32H723"
+      "id": "STM32F407VG",
+      "label": "STM32F407VGT6 (168 MHz)",
+      "marlin_env": "mks_robin_nano_v3",
+      "klipper_mcu": "stm32f407xx",
+      "klipper_mach": "CONFIG_MACH_STM32F407"
     }
   ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": true
+  },
   "marlin": {
-    "motherboard": "BOARD_BTT_SKR_V3_0",
+    "motherboard": "BOARD_MKS_ROBIN_NANO_V3",
     "serial_ports": [
       1,
       -1
@@ -28,8 +25,7 @@
       "X",
       "Y",
       "Z",
-      "E0",
-      "E1"
+      "E0"
     ],
     "valid_drivers": [
       "TMC2209",
@@ -37,11 +33,10 @@
       "TMC2130",
       "TMC5160",
       "A4988",
-      "DRV8825",
-      "LV8729"
+      "DRV8825"
     ],
     "onboard_uart_drivers": true,
-    "max_extruders": 2,
+    "max_extruders": 1,
     "screens": [
       {
         "id": "none",
@@ -132,32 +127,27 @@
       }
     ]
   },
-  "klipper": {
-    "reference_config": "generic-bigtreetech-skr-3.cfg",
-    "config_seed": [
-      "CONFIG_MACH_STM32=y",
-      "{MACH}=y",
-      "CONFIG_STM32_FLASH_START_20000=y",
-      "CONFIG_STM32_CLOCK_REF_25M=y",
-      "CONFIG_USBSERIAL=y"
-    ],
-    "kconfig": {
-      "FLASH_APPLICATION_ADDRESS": "0x8020000"
-    },
-    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (128KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32H743"
-  },
   "limits": {
-    "max_bed_x": 500,
-    "max_bed_y": 500,
-    "max_z": 600,
+    "max_bed_x": 400,
+    "max_bed_y": 400,
+    "max_z": 400,
     "max_hotend_temp": 350,
     "max_bed_temp": 130,
     "max_feedrate_xy": 500,
     "max_feedrate_z": 20
   },
-  "firmware_support": {
-    "marlin": true,
-    "klipper": true
+  "klipper": {
+    "reference_config": "generic-mks-robin-nano-v3.cfg",
+    "config_seed": [
+      "CONFIG_MACH_STM32=y",
+      "{MACH}=y",
+      "CONFIG_STM32_FLASH_START_8000=y",
+      "CONFIG_USBSERIAL=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x8008000"
+    },
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (32KiB bootloader).",
+    "mach": "CONFIG_MACH_STM32F407"
   }
 }
