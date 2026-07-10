@@ -116,8 +116,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
         <h2>Configuration</h2>
         <?php if ($project['source_state'] !== 'ready'): ?>
             <p class="empty">Configuration editor unlocks once a firmware source is imported.</p>
-        <?php elseif ($fwKey !== 'marlin'): ?>
-            <p class="empty">Klipper configuration generation ships in a later phase.</p>
+
         <?php else: ?>
             <p class="empty" id="cfgLoading">Loading configuration&hellip;</p>
             <form id="cfgForm" hidden>
@@ -159,9 +158,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 
     <section class="panel" id="buildPanel">
         <h2>Builds</h2>
-        <?php if ($fwKey !== 'marlin'): ?>
-            <p class="empty">Klipper builds ship in a later phase.</p>
-        <?php elseif ($project['source_state'] !== 'ready'): ?>
+        <?php if ($project['source_state'] !== 'ready'): ?>
             <p class="empty">Import a firmware source and submit a configuration to build.</p>
         <?php else: ?>
             <div class="actions" style="margin-bottom:12px">

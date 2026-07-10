@@ -6,13 +6,13 @@
   <Network>bridge</Network>
   <Shell>bash</Shell>
   <Privileged>false</Privileged>
-  <Support/>
-  <Project/>
-  <Overview>3D printer firmware configuration and build workshop. Marlin (PlatformIO compile) and Klipper (MCU firmware + printer.cfg generation) with per-board validation and confidence-gated builds.</Overview>
+  <Support>https://github.com/pumpkinpieman/HotFetched/issues</Support>
+  <Project>https://github.com/pumpkinpieman/HotFetched</Project>
+  <Overview>Self-hosted 3D printer firmware workshop. Pick a motherboard (BTT SKR 3/EZ, SKR Mini E3 V3, Octopus, Manta M8P), import Marlin or Klipper source from GitHub or ZIP, edit the full configuration in a web UI (drivers, sensorless homing, probes, displays, boot images, startup sounds), and run confidence-gated builds where 100%% means the firmware actually compiled. Exports firmware.bin / klipper.bin plus config bundles.</Overview>
   <Category>Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8090]/</WebUI>
-  <Icon/>
-  <Config Name="WebUI Port" Target="80" Default="8090" Mode="tcp" Description="HTTP port" Type="Port" Display="always" Required="true" Mask="false">8090</Config>
+  <WebUI>http://[IP]:[PORT:16356]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/pumpkinpieman/HotFetched/main/deploy/icon.png</Icon>
+  <Config Name="WebUI Port" Target="80" Default="16356" Mode="tcp" Description="HTTP port" Type="Port" Display="always" Required="true" Mask="false">16356</Config>
   <Config Name="Private data" Target="/var/www/html/private" Default="/mnt/cache/appdata/hotfetched/private" Mode="rw" Description="SQLite DB, project sources, build artifacts. Keep on cache-only storage (NOT array/user-share) — same SQLite locking rule as FarFetched." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/hotfetched/private</Config>
   <Config Name="PlatformIO cache" Target="/opt/platformio" Default="/mnt/cache/appdata/hotfetched/platformio" Mode="rw" Description="Persists the STM32 toolchain (~1-2 GB) so it is not re-downloaded on container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/hotfetched/platformio</Config>
 </Container>

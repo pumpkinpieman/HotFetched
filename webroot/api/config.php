@@ -32,9 +32,7 @@ function load_config_context(array $body): array
     if ($p === null) {
         json_out(['ok' => false, 'error' => 'Project not found'], 404);
     }
-    if ($p['firmware'] !== 'marlin') {
-        json_out(['ok' => false, 'error' => 'Configuration editor currently supports Marlin projects (Klipper ships in a later phase)'], 422);
-    }
+
     if ($p['source_state'] !== 'ready') {
         json_out(['ok' => false, 'error' => 'Import a firmware source first'], 409);
     }
@@ -43,6 +41,12 @@ function load_config_context(array $body): array
         json_out(['ok' => false, 'error' => 'Board definition missing'], 500);
     }
     $detect = json_decode((string)$p['source_detect'], true);
+
+    if ($p['firmware'] === 'klipper') {
+        // Klipper: values are stored and applied to printer.cfg at build time.
+        return [$p, $board, null, null, null];
+    }
+
     $confRel = $detect['files']['configuration'] ?? null;
     $advRel  = $detect['files']['configuration_adv'] ?? null;
     if (!is_string($confRel) || !is_string($advRel)) {
@@ -67,6 +71,21 @@ switch ($action) {
 
     case 'get': {
         [$p, $board, $doc, , $advPath] = load_config_context($body);
+
+        if ($p['firmware'] === 'klipper') {
+            $detect = json_decode((string)$p['source_detect'], true);
+            $refRel = $board['klipper']['reference_config'] ?? '';
+            $root   = ($detect['root'] ?? '') !== '' ? '/' . $detect['root'] : '';
+            $refTxt = (string)@file_get_contents(project_source_dir((int)$p['id']) . $root . '/config/' . $refRel);
+            $fields  = klipper_field_defs($board);
+            $current = klipper_current_values($refTxt);
+            $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
+            $stmt->execute([(int)$p['id']]);
+            foreach ($stmt->fetchAll() as $row) {
+                $current[$row['field_key']] = $row['field_value'];
+            }
+            json_out(['ok' => true, 'fields' => $fields, 'values' => $current, 'meta' => ['mono_screens' => [], 'event_presets' => HF_EVENT_PRESETS]]);
+        }
 
         $adv = marlin_config_parse($advPath);
         if ($adv === null) {
@@ -96,6 +115,25 @@ switch ($action) {
 
     case 'save': {
         [$p, $board, $doc, $confPath, $advPath] = load_config_context($body);
+
+        if ($p['firmware'] === 'klipper') {
+            $fields = klipper_field_defs($board);
+            $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
+            [$values, $errors] = hf_validate_fields($fields, $input);
+            if ($errors !== []) {
+                json_out(['ok' => false, 'error' => 'Validation failed', 'field_errors' => $errors], 422);
+            }
+            $pdo = db();
+            $pdo->beginTransaction();
+            $pdo->prepare('DELETE FROM config_values WHERE project_id = ?')->execute([(int)$p['id']]);
+            $ins = $pdo->prepare('INSERT INTO config_values (project_id, field_key, field_value) VALUES (?, ?, ?)');
+            foreach ($values as $k => $v) {
+                $ins->execute([(int)$p['id'], $k, (string)$v]);
+            }
+            $pdo->commit();
+            $pdo->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$p['id']]);
+            json_out(['ok' => true, 'applied' => array_keys($values)]);
+        }
 
         $adv = marlin_config_parse($advPath);
         if ($adv === null) {

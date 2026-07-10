@@ -7,13 +7,15 @@
       "id": "STM32H743VI",
       "label": "STM32H743VIT6 (480 MHz, 2 MB flash)",
       "marlin_env": "STM32H743VI_btt",
-      "klipper_mcu": "stm32h743xx"
+      "klipper_mcu": "stm32h743xx",
+      "klipper_mach": "CONFIG_MACH_STM32H743"
     },
     {
       "id": "STM32H723VG",
       "label": "STM32H723VGT6 (550 MHz, 1 MB flash)",
       "marlin_env": "STM32H723VG_btt",
-      "klipper_mcu": "stm32h723xx"
+      "klipper_mcu": "stm32h723xx",
+      "klipper_mach": "CONFIG_MACH_STM32H723"
     }
   ],
   "marlin": {
@@ -131,13 +133,17 @@
   },
   "klipper": {
     "reference_config": "generic-bigtreetech-skr-3.cfg",
+    "config_seed": [
+      "CONFIG_MACH_STM32=y",
+      "{MACH}=y",
+      "CONFIG_STM32_FLASH_START_20000=y",
+      "CONFIG_STM32_CLOCK_REF_25M=y",
+      "CONFIG_USBSERIAL=y"
+    ],
     "kconfig": {
-      "MACH_STM32": true,
-      "FLASH_APPLICATION_ADDRESS": "0x8020000",
-      "STM32_CLOCK_REF_25M": true,
-      "USBSERIAL": true
+      "FLASH_APPLICATION_ADDRESS": "0x8020000"
     },
-    "flash_note": "Copy klipper.bin to SD as firmware.bin (128KiB bootloader offset)."
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (128KiB bootloader)."
   },
   "limits": {
     "max_bed_x": 500,

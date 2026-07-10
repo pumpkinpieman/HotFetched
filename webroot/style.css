@@ -268,3 +268,11 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
     color: var(--muted);
 }
 a.btn { text-decoration: none; display: inline-block; }
+
+/* Thermal override warning */
+.cfg-danger input[type="checkbox"] { accent-color: var(--bad); }
+.cfg-warning {
+    color: var(--bad);
+    font-weight: 700;
+    font-size: 12px;
+}

@@ -57,6 +57,8 @@ if (!is_array($body)) {
 
 csrf_verify($body['csrf'] ?? null);
 
+builds_sweep_stale();
+
 $action = (string)($body['action'] ?? '');
 
 switch ($action) {
@@ -69,9 +71,6 @@ switch ($action) {
         $p = project_get($pid);
         if ($p === null) {
             json_out(['ok' => false, 'error' => 'Project not found'], 404);
-        }
-        if ($p['firmware'] !== 'marlin') {
-            json_out(['ok' => false, 'error' => 'Builds currently support Marlin projects (Klipper ships in a later phase)'], 422);
         }
         if ($p['source_state'] !== 'ready') {
             json_out(['ok' => false, 'error' => 'Import a firmware source first'], 409);
@@ -111,22 +110,6 @@ switch ($action) {
         $b = $stmt->fetch();
         if (!$b) {
             json_out(['ok' => false, 'error' => 'Build not found'], 404);
-        }
-
-        // Stall watchdog: queued with no worker signs for 3 minutes, or an
-        // active build with a silent log for 15 minutes.
-        if (in_array($b['status'], ['queued', 'validating', 'building'], true)) {
-            $hasLog = is_string($b['log_path']) && is_file($b['log_path']);
-            $ref = $hasLog
-                ? (int)filemtime($b['log_path'])
-                : ($b['started_at'] !== null ? strtotime((string)$b['started_at'] . ' UTC') : 0);
-            $limit = (!$hasLog && $b['status'] === 'queued') ? 180 : 900;
-            if ($ref !== false && $ref > 0 && time() - $ref > $limit) {
-                db()->prepare("UPDATE builds SET status = 'failed', finished_at = datetime('now') WHERE id = ? AND status IN ('queued','validating','building')")
-                    ->execute([$id]);
-                $stmt->execute([$id]);
-                $b = $stmt->fetch();
-            }
         }
 
         $tail = '';

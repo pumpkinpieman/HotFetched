@@ -1,25 +1,18 @@
 {
-  "id": "btt_skr_v3_0",
-  "name": "BigTreeTech SKR 3",
+  "id": "btt_manta_m8p_v2_0",
+  "name": "BigTreeTech Manta M8P V2.0",
   "vendor": "BigTreeTech",
   "mcu_variants": [
     {
-      "id": "STM32H743VI",
-      "label": "STM32H743VIT6 (480 MHz, 2 MB flash)",
-      "marlin_env": "STM32H743VI_btt",
-      "klipper_mcu": "stm32h743xx",
-      "klipper_mach": "CONFIG_MACH_STM32H743"
-    },
-    {
-      "id": "STM32H723VG",
-      "label": "STM32H723VGT6 (550 MHz, 1 MB flash)",
-      "marlin_env": "STM32H723VG_btt",
+      "id": "STM32H723ZE",
+      "label": "STM32H723ZET6 (550 MHz)",
+      "marlin_env": "STM32H723ZE_btt",
       "klipper_mcu": "stm32h723xx",
       "klipper_mach": "CONFIG_MACH_STM32H723"
     }
   ],
   "marlin": {
-    "motherboard": "BOARD_BTT_SKR_V3_0",
+    "motherboard": "BOARD_BTT_MANTA_M8P_V2_0",
     "serial_ports": [
       1,
       -1
@@ -37,8 +30,7 @@
       "TMC2130",
       "TMC5160",
       "A4988",
-      "DRV8825",
-      "LV8729"
+      "DRV8825"
     ],
     "onboard_uart_drivers": true,
     "max_extruders": 2,
@@ -133,7 +125,7 @@
     ]
   },
   "klipper": {
-    "reference_config": "generic-bigtreetech-skr-3.cfg",
+    "reference_config": "generic-bigtreetech-manta-m8p-v1.1.cfg",
     "config_seed": [
       "CONFIG_MACH_STM32=y",
       "{MACH}=y",
@@ -147,12 +139,12 @@
     "flash_note": "Copy out/klipper.bin to SD as firmware.bin (128KiB bootloader)."
   },
   "limits": {
-    "max_bed_x": 500,
-    "max_bed_y": 500,
-    "max_z": 600,
+    "max_bed_x": 600,
+    "max_bed_y": 600,
+    "max_z": 700,
     "max_hotend_temp": 350,
     "max_bed_temp": 130,
-    "max_feedrate_xy": 500,
-    "max_feedrate_z": 20
+    "max_feedrate_xy": 800,
+    "max_feedrate_z": 30
   }
 }

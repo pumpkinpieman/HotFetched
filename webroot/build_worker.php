@@ -95,6 +95,89 @@ db()->prepare("UPDATE builds SET status = 'validating', started_at = datetime('n
     ->execute([$logPath, $buildId]);
 blog('Build #' . $buildId . ' — ' . $project['name'] . ' (' . $project['firmware'] . ', ' . ($board['name'] ?? '?') . ')');
 
+/* --------------------------------------------------- Klipper pipeline */
+
+if ($project['firmware'] === 'klipper') {
+    $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
+    $stmt->execute([(int)$project['id']]);
+    $saved = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $saved[$r['field_key']] = $r['field_value'];
+    }
+    if ($saved === []) {
+        gate('s1_present', 'Configuration submitted', 40, false, 'No configuration saved — submit the Configuration form first');
+        bstate('failed', 0, true);
+        exit(0);
+    }
+    $fields = klipper_field_defs($board);
+    [$vals, $errors] = hf_validate_fields($fields, $saved);
+    $confidence += gate('s1_valid', 'Configuration values valid and within limits', 40, $errors === [],
+        implode('; ', array_map(fn ($k, $m) => "$k: $m", array_keys($errors), $errors)));
+    if ($confidence < 40) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    $detect = json_decode((string)$project['source_detect'], true);
+    $root   = realpath(project_source_dir((int)$project['id']));
+    $tree   = $root . (($detect['root'] ?? '') !== '' ? '/' . $detect['root'] : '');
+    $refRel = (string)($board['klipper']['reference_config'] ?? '');
+    $refTxt = @file_get_contents($tree . '/config/' . $refRel);
+    $seed   = klipper_config_seed($board, $variant);
+
+    $confidence += gate('s2_ref', 'Board reference printer.cfg present', 10, is_string($refTxt) && $refTxt !== '',
+        is_string($refTxt) ? '' : 'config/' . $refRel . ' not found in source tree');
+    $confidence += gate('s2_seed', 'MCU firmware options resolve for this board', 10, $seed !== null,
+        $seed !== null ? '' : 'Board definition lacks a Klipper config seed');
+    if ($confidence < 60) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    bstate('building', $confidence);
+    @file_put_contents($tree . '/.config', $seed);
+    blog('Klipper .config seed:');
+    foreach (explode("\n", trim((string)$seed)) as $l) {
+        blog('  ' . $l);
+    }
+
+    $cmd = 'cd ' . escapeshellarg($tree)
+         . ' && env HOME=/tmp timeout 900 sh -c ' . escapeshellarg('make olddefconfig && make -j2')
+         . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
+    $exit = (int)trim((string)shell_exec($cmd));
+
+    $bin = $tree . '/out/klipper.bin';
+    $built = $exit === 0 && is_file($bin);
+    $detail = '';
+    if (!$built) {
+        $tail = (string)@shell_exec('grep -iE "error" ' . escapeshellarg($logPath) . ' | tail -6');
+        $detail = $exit === 124 ? 'Build timed out (15 min)' : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit);
+    }
+    $confidence += gate('s3_make', 'Klipper MCU firmware compiles (klipper.bin)', 40, $built, $detail);
+
+    if ($built) {
+        @copy($bin, $buildDir . '/klipper.bin');
+        // The download endpoint serves firmware.bin by name — provide both.
+        @copy($bin, $buildDir . '/firmware.bin');
+        db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')
+            ->execute([$buildDir . '/firmware.bin', $buildId]);
+        blog('klipper.bin: ' . number_format((float)filesize($bin)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
+
+        $printerCfg = klipper_generate_printer_cfg((string)$refTxt, $vals);
+        @file_put_contents($buildDir . '/printer.cfg', $printerCfg);
+        $zip = new ZipArchive();
+        if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+            $zip->addFromString('printer.cfg', $printerCfg);
+            $zip->addFromString('klipper.config', (string)$seed);
+            $zip->addFromString('FLASHING.txt', (string)($board['klipper']['flash_note'] ?? '') . "\nHost side: place printer.cfg in your Klipper host config directory and set the [mcu] serial.");
+            $zip->close();
+        }
+    }
+    bstate($built ? 'success' : 'failed', $confidence, true);
+    db()->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$project['id']]);
+    exit(0);
+}
+
 /* ------------------------------------------------ Stage 1: static (40) */
 
 if ($board === null || $variant === null) {
