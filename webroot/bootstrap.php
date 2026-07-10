@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.3.0';
+const HF_VERSION = '2.3.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1554,11 +1554,14 @@ function marlin_apply_values_adv(array &$adv, array $v): array
 /** Editable fields for a Klipper project (applied to printer.cfg at build). */
 function klipper_field_defs(array $board): array
 {
-    $lim = $board['limits'];
+    $lim = $board['limits'] ?? [];
+    // Never emit a zero/negative max — a missing limit would otherwise make the
+    // field impossible to satisfy (max < min). Fall back to generous defaults.
+    $limMax = fn (string $k, int $default): int => (($v = (int)($lim[$k] ?? 0)) > 0 ? $v : $default);
     return [
-        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_x']],
-        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_y']],
-        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_z']],
+        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_x', 500)],
+        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_y', 500)],
+        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_z', 600)],
         ['key' => 'kl_velocity', 'label' => 'max_velocity (mm/s)',  'group' => 'Speed', 'type' => 'int', 'min' => 20,  'max' => 1000],
         ['key' => 'kl_accel',    'label' => 'max_accel (mm/s²)',    'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 50000],
         ['key' => 'kl_cur_x',  'label' => 'X run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],

@@ -144,5 +144,14 @@
     "artifact": "klipper.bin"
   },
   "min_marlin": "\u2014",
-  "note": "Voron-specific integrated board (5x TMC2209 + 2x TMC5160 onboard, RPi mount). Klipper only \u2014 Marlin has no board definition for it (LDO lists Marlin as TBD). The generic config assumes a Voron CoreXY; adjust steppers/limits for your machine. V1.3 uses an STM32H743 and needs a different config not yet shipped upstream."
+  "note": "Voron-specific integrated board (5x TMC2209 + 2x TMC5160 onboard, RPi mount). Klipper only \u2014 Marlin has no board definition for it (LDO lists Marlin as TBD). The generic config assumes a Voron CoreXY; adjust steppers/limits for your machine. V1.3 uses an STM32H743 and needs a different config not yet shipped upstream.",
+  "limits": {
+    "max_bed_x": 400,
+    "max_bed_y": 400,
+    "max_z": 500,
+    "max_hotend_temp": 350,
+    "max_bed_temp": 130,
+    "max_feedrate_xy": 800,
+    "max_feedrate_z": 40
+  }
 }
