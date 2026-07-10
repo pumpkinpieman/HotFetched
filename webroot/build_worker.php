@@ -142,6 +142,18 @@ if (($saved['singlenozzle'] ?? '0') === '1' && ($vals['extruders'] ?? '1') !== '
 if ((int)($vals['homing_xy'] ?? 0) > (int)($vals['feed_x'] ?? PHP_INT_MAX)) {
     $conflicts[] = 'Homing XY speed exceeds max feedrate X';
 }
+// Per-sensor max temps extracted from Marlin's own thermistor tables
+// (thermistor_N.h, highest table entry). Mirrors the compiler's
+// static_assert: HEATER_0_MAXTEMP + HOTEND_OVERSHOOT (15) must fit the
+// table. High-temp sensors (Dyze 66: 850C, Slice 67: 500C, ...) pass
+// at their real limits; unknown/thermocouple ids are left to Marlin.
+$thermistorTableMax = [1 => 320, 2 => 848, 3 => 864, 4 => 430, 5 => 713, 6 => 350, 7 => 941, 8 => 704, 9 => 936, 10 => 929, 11 => 938, 12 => 180, 13 => 300, 14 => 275, 15 => 275, 17 => 309, 18 => 713, 20 => 1100, 21 => 500, 22 => 352, 23 => 938, 30 => 938, 51 => 350, 52 => 500, 55 => 500, 60 => 272, 61 => 420, 66 => 850, 67 => 500, 68 => 500, 70 => 270, 71 => 300, 75 => 200, 99 => 350, 201 => 490, 202 => 864, 331 => 300, 332 => 150, 501 => 713, 502 => 300, 503 => 300, 504 => 330, 505 => 938, 512 => 300, 666 => 794, 2000 => 125];
+$sensor0 = (int)($vals['temp_sensor_0'] ?? 0);
+$maxT    = (int)($vals['hotend_maxtemp'] ?? 0);
+if (isset($thermistorTableMax[$sensor0]) && $maxT + 15 > $thermistorTableMax[$sensor0]) {
+    $allowed = $thermistorTableMax[$sensor0] - 15;
+    $conflicts[] = "Nozzle max temp {$maxT}C + 15C overshoot exceeds thermistor table {$sensor0} (max {$thermistorTableMax[$sensor0]}C) - set {$allowed}C or lower, or pick a higher-rated sensor";
+}
 $confidence += gate('s1_conflicts', 'No conflicting settings', 10, $conflicts === [], implode('; ', $conflicts));
 
 if ($confidence < 40) {
