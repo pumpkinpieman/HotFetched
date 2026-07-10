@@ -692,26 +692,45 @@ function sndRender() {
             }
         }
         libList.innerHTML = '';
+        const loadEntry = async (rel) => {
+            libMsg.textContent = 'Loading\u2026';
+            const fr = await libApi({ action: 'file', path: rel });
+            if (!fr.ok) { libMsg.textContent = fr.error || 'Load failed'; return null; }
+            const bin = Uint8Array.from(atob(fr.data_b64), ch => ch.charCodeAt(0));
+            const seq = midiToSeq(bin.buffer);
+            libMsg.textContent = seq ? '' : ('Could not parse ' + fr.name);
+            return seq;
+        };
         for (const rel of res.files) {
-            const row = document.createElement('button');
-            row.type = 'button';
+            const row = document.createElement('div');
             row.className = 'lib-item';
-            row.textContent = rel.replace(/\.mid$/i, '');
-            row.addEventListener('click', async () => {
-                libMsg.textContent = 'Loading\u2026';
-                const fr = await libApi({ action: 'file', path: rel });
-                if (!fr.ok) { libMsg.textContent = fr.error || 'Load failed'; return; }
-                const bin = Uint8Array.from(atob(fr.data_b64), ch => ch.charCodeAt(0));
-                midiSeq = midiToSeq(bin.buffer);
-                if (midiSeq) {
-                    ta.value = '';
-                    impMsg.textContent = fr.name + ': ' + midiSeq.length + ' tones \u2014 Preview, then Apply';
-                    libMsg.textContent = '';
-                    playSeq(midiSeq);
-                } else {
-                    libMsg.textContent = 'Could not parse ' + fr.name;
-                }
+            const name = document.createElement('span');
+            name.className = 'lib-name';
+            name.textContent = rel.replace(/\.mid$/i, '');
+            const play = document.createElement('button');
+            play.type = 'button';
+            play.className = 'btn sm';
+            play.textContent = '\u25B6';
+            play.title = 'Play';
+            play.addEventListener('click', async () => {
+                const seq = await loadEntry(rel);
+                if (seq) playSeq(seq);
             });
+            const applyRow = document.createElement('button');
+            applyRow.type = 'button';
+            applyRow.className = 'btn sm primary';
+            applyRow.textContent = 'Apply';
+            applyRow.title = 'Apply to the event selected in \u201CApply to\u201D above';
+            applyRow.addEventListener('click', async () => {
+                const seq = await loadEntry(rel);
+                if (!seq) return;
+                midiSeq = seq;
+                applyBtn.click();
+                impMsg.textContent = 'Applied \u201C' + name.textContent.split(' - ').pop()
+                    + '\u201D to ' + target.options[target.selectedIndex].textContent.replace('Apply to: ', '')
+                    + ' \u2014 remember to Submit Configuration';
+            });
+            row.append(name, play, applyRow);
             libList.appendChild(row);
         }
         libMsg.textContent = res.files.length + ' shown of ' + res.total;
