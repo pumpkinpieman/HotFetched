@@ -210,7 +210,7 @@ $built = $exit === 0 && is_file($fwSrc);
 $detail = '';
 if (!$built) {
     $tail = (string)@shell_exec('grep -iE "error|#error" ' . escapeshellarg($logPath) . ' | tail -8');
-    $detail = $exit === 124 ? 'Compile timed out (40 min)' : trim($tail) ?: 'Compiler exited ' . $exit;
+    $detail = $exit === 124 ? 'Compile timed out (40 min)' : ((trim($tail) !== '') ? trim($tail) : 'Compiler exited ' . $exit);
 }
 $confidence += gate('s3_compile', 'PlatformIO compile produces firmware.bin', 40, $built, $detail);
 

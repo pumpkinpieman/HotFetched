@@ -41,7 +41,10 @@ RUN sed -ri 's!/var/www/html!/var/www/html/webroot!g' \
 
 # --- App --------------------------------------------------------------------
 COPY webroot/ /var/www/html/webroot/
-RUN mkdir -p /var/www/html/private/projects \
+# Lint gate: a PHP parse error anywhere fails the image build immediately,
+# instead of surfacing as a silently dead worker at runtime.
+RUN find /var/www/html/webroot -name '*.php' -print0 | xargs -0 -n1 php -l \
+    && mkdir -p /var/www/html/private/projects \
     && chown -R www-data:www-data /var/www/html
 
 # PHP hardening
