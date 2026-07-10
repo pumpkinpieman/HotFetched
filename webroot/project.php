@@ -359,12 +359,29 @@ function cfgApplyVisibility() {
 
 let CFG_META = { mono_screens: [], event_presets: {} };
 
-/* Piezo preview: square-wave synthesis of freq/ms sequences (Web Audio). */
+/* Piezo preview: square-wave synthesis with a single global voice.
+   Starting any playback stops the previous one; buttons toggle play/stop. */
 let audioCtx = null;
-function playSeq(seq) {
-    if (!seq.length) return;
+const player = { nodes: [], btn: null, timer: null };
+
+function stopPlayback() {
+    for (const n of player.nodes) {
+        try { n.stop(0); } catch {}
+    }
+    player.nodes = [];
+    clearTimeout(player.timer);
+    if (player.btn) {
+        player.btn.textContent = player.btn.dataset.playLabel || '\u25B6';
+        player.btn = null;
+    }
+}
+
+function playSeq(seq, btn) {
+    stopPlayback();
+    if (!seq || !seq.length) return;
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     let t = audioCtx.currentTime + 0.03;
+    let totalMs = 0;
     for (const [f, ms] of seq) {
         if (f > 0) {
             const osc = audioCtx.createOscillator();
@@ -376,9 +393,23 @@ function playSeq(seq) {
             osc.connect(gain).connect(audioCtx.destination);
             osc.start(t);
             osc.stop(t + ms / 1000);
+            player.nodes.push(osc);
         }
         t += ms / 1000;
+        totalMs += ms;
     }
+    if (btn) {
+        player.btn = btn;
+        btn.dataset.playLabel = btn.dataset.playLabel || btn.textContent;
+        btn.textContent = '\u25A0 Stop';
+        player.timer = setTimeout(stopPlayback, totalMs + 80);
+    }
+}
+
+/* Toggle helper for every play button. */
+function togglePlay(btn, seqGetter) {
+    if (player.btn === btn) { stopPlayback(); return; }
+    Promise.resolve(seqGetter()).then(seq => { if (seq) playSeq(seq, btn); });
 }
 
 function csvToSeq(csv) {
@@ -516,6 +547,125 @@ function midiToSeq(buf) {
     return seq.length ? seq.slice(0, 64) : null;
 }
 
+/* Monophonic melody extraction from decoded audio (MP3/WAV) via
+   autocorrelation pitch tracking. Works for whistled/hummed/single-line
+   audio; full mixes have no single pitch to find. */
+function detectPitchSeq(samples, sampleRate) {
+    const frame = 2048, hop = 512;
+    const minF = 80, maxF = 1500;
+    const minLag = Math.floor(sampleRate / maxF);
+    const maxLag = Math.ceil(sampleRate / minF);
+    const frames = [];
+    for (let start = 0; start + frame <= samples.length; start += hop) {
+        let rms = 0;
+        for (let i = 0; i < frame; i++) rms += samples[start + i] * samples[start + i];
+        rms = Math.sqrt(rms / frame);
+        if (rms < 0.015) { frames.push(0); continue; }
+        let bestLag = 0, best = 0;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+            let s = 0;
+            for (let i = 0; i < frame - lag; i++) s += samples[start + i] * samples[start + i + lag];
+            if (s > best) { best = s; bestLag = lag; }
+        }
+        let e = 0;
+        for (let i = 0; i < frame; i++) e += samples[start + i] * samples[start + i];
+        frames.push(best / e > 0.35 && bestLag > 0 ? sampleRate / bestLag : 0);
+    }
+    // Median-of-3 smoothing
+    const sm = frames.map((v, i) => {
+        const a = [frames[i - 1] ?? v, v, frames[i + 1] ?? v].sort((x, y) => x - y);
+        return a[1];
+    });
+    // Segment into notes: snap to semitone, merge stable runs, gaps -> rests
+    const frameMs = hop / sampleRate * 1000;
+    const seq = [];
+    let curMidi = null, curMs = 0;
+    const push = () => {
+        if (curMs < 60) { curMidi = null; curMs = 0; return; }
+        if (curMidi === null) {
+            if (seq.length) seq.push([0, Math.min(Math.round(curMs), 2000)]);
+        } else {
+            seq.push([Math.round(440 * Math.pow(2, (curMidi - 69) / 12)), Math.min(Math.round(curMs), 3000)]);
+        }
+        curMidi = null;
+        curMs = 0;
+    };
+    for (const f of sm) {
+        const midi = f > 0 ? Math.round(69 + 12 * Math.log2(f / 440)) : null;
+        if (midi === curMidi) { curMs += frameMs; continue; }
+        push();
+        curMidi = midi;
+        curMs = frameMs;
+    }
+    push();
+    while (seq.length && seq[0][0] === 0) seq.shift();
+    while (seq.length && seq[seq.length - 1][0] === 0) seq.pop();
+    return seq.length ? seq.slice(0, 64) : null;
+}
+
+async function audioFileToSeq(arrayBuffer) {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    // Mix down + downsample by striding for speed on long files
+    const ch = decoded.getChannelData(0);
+    const stride = Math.max(1, Math.floor(decoded.sampleRate / 22050));
+    const n = Math.min(Math.floor(ch.length / stride), 22050 * 30); // cap 30s
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) mono[i] = ch[i * stride];
+    return detectPitchSeq(mono, decoded.sampleRate / stride);
+}
+
+/* ------------------------- Exporters (seq -> .mid / .rtttl / .csv) */
+function seqToMidiBlob(seq) {
+    const division = 480, usPerQN = 500000; // 120 bpm
+    const bytes = [];
+    const vlq = (n) => { const s = [n & 0x7F]; n >>= 7; while (n) { s.unshift(0x80 | (n & 0x7F)); n >>= 7; } return s; };
+    const track = [0, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20];
+    let pendingDelta = 0;
+    for (const [f, ms] of seq) {
+        const ticks = Math.max(1, Math.round(ms * 1000 / usPerQN * division));
+        if (f === 0) { pendingDelta += ticks; continue; }
+        const note = Math.max(0, Math.min(127, Math.round(69 + 12 * Math.log2(f / 440))));
+        track.push(...vlq(pendingDelta), 0x90, note, 100, ...vlq(ticks), 0x80, note, 0);
+        pendingDelta = 0;
+    }
+    track.push(0, 0xFF, 0x2F, 0x00);
+    const u32 = (n) => [n >>> 24 & 255, n >>> 16 & 255, n >>> 8 & 255, n & 255];
+    const u16 = (n) => [n >>> 8 & 255, n & 255];
+    bytes.push(0x4D, 0x54, 0x68, 0x64, ...u32(6), ...u16(0), ...u16(1), ...u16(division));
+    bytes.push(0x4D, 0x54, 0x72, 0x6B, ...u32(track.length), ...track);
+    return new Blob([new Uint8Array(bytes)], { type: 'audio/midi' });
+}
+
+function seqToRtttl(seq, name) {
+    const bpm = 120, whole = 4 * 60000 / bpm;
+    const NAMES = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
+    const durOf = (ms) => {
+        let best = 4, bd = Infinity;
+        for (const d2 of [1, 2, 4, 8, 16, 32]) {
+            const diff = Math.abs(whole / d2 - ms);
+            if (diff < bd) { bd = diff; best = d2; }
+        }
+        return best;
+    };
+    const toks = seq.map(([f, ms]) => {
+        const d2 = durOf(ms);
+        if (f === 0) return d2 + 'p';
+        const midi = Math.round(69 + 12 * Math.log2(f / 440));
+        const oct = Math.max(4, Math.min(7, Math.floor(midi / 12) - 1));
+        return d2 + NAMES[midi % 12] + oct;
+    });
+    return (name || 'HotFetched') + ':d=4,o=5,b=' + bpm + ':' + toks.join(',');
+}
+
+function downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 function m300Lines(seq) {
     if (!seq.length) return '; (no sound)';
     return seq.map(([f, p]) => f === 0 ? `G4 P${p}` : `M300 S${f} P${p}`).join('\n');
@@ -547,7 +697,7 @@ function sndRender() {
         play.type = 'button';
         play.className = 'btn sm';
         play.textContent = '\u25B6 Play';
-        play.addEventListener('click', () => playSeq(eventSeq(key)));
+        play.addEventListener('click', () => togglePlay(play, () => eventSeq(key)));
         const copy = document.createElement('button');
         copy.type = 'button';
         copy.className = 'btn sm';
@@ -560,14 +710,14 @@ function sndRender() {
 
     // Import card: RTTTL / freq-ms CSV -> apply as a custom sequence to a chosen slot.
     const imp = document.createElement('div');
-    imp.className = 'src-card';
+    imp.className = 'src-card snd-import-card';
     imp.innerHTML = '<h3>Import melody (RTTTL ringtone text or freq,ms CSV)</h3>';
     const ta = document.createElement('textarea');
     ta.className = 'snd-import';
     ta.placeholder = 'Beep:d=8,o=5,b=120:c,e,g  \u2014 or \u2014  523,120,0,40,784,180';
     const fileIn = document.createElement('input');
     fileIn.type = 'file';
-    fileIn.accept = '.mid,.midi,.rtttl,.txt';
+    fileIn.accept = '.mid,.midi,.rtttl,.txt,.mp3,.wav,.ogg,.m4a';
     let midiSeq = null;
     const target = document.createElement('select');
     for (const [k, lbl] of [['startup', 'Power-on tune (firmware)'], ...events]) {
@@ -599,28 +749,37 @@ function sndRender() {
         impMsg.textContent = '';
         const f = fileIn.files[0];
         if (!f) return;
-        const isMidi = /\.midi?$/i.test(f.name);
+        const isMidi  = /\.midi?$/i.test(f.name);
+        const isAudio = /\.(mp3|wav|ogg|m4a)$/i.test(f.name);
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
             if (isMidi) {
                 midiSeq = midiToSeq(reader.result);
                 impMsg.textContent = midiSeq
                     ? 'MIDI parsed: ' + midiSeq.length + ' tones \u2014 Preview, then Apply'
                     : 'Could not parse MIDI file';
+            } else if (isAudio) {
+                impMsg.textContent = 'Analyzing audio (melody extraction)\u2026';
+                try {
+                    midiSeq = await audioFileToSeq(reader.result);
+                } catch { midiSeq = null; }
+                impMsg.textContent = midiSeq
+                    ? 'Melody extracted: ' + midiSeq.length + ' tones \u2014 Preview, then Apply. Works best on single-instrument/whistled audio.'
+                    : 'No clear melody found (full mixes with vocals+drums cannot be converted \u2014 try a monophonic recording)';
             } else {
                 ta.value = String(reader.result).trim();
                 impMsg.textContent = 'File loaded \u2014 Preview, then Apply';
             }
         };
-        if (isMidi) reader.readAsArrayBuffer(f);
+        if (isMidi || isAudio) reader.readAsArrayBuffer(f);
         else reader.readAsText(f);
     });
     ta.addEventListener('input', () => { midiSeq = null; if (fileIn.value) fileIn.value = ''; });
-    tryBtn.addEventListener('click', () => {
+    tryBtn.addEventListener('click', () => togglePlay(tryBtn, () => {
         const seq = parseImport();
-        if (seq) playSeq(seq);
-        else impMsg.textContent = 'Could not parse melody';
-    });
+        if (!seq) impMsg.textContent = 'Could not parse melody';
+        return seq;
+    }));
     applyBtn.addEventListener('click', () => {
         const seq = parseImport();
         if (!seq) { impMsg.textContent = 'Could not parse melody'; return; }
@@ -639,6 +798,29 @@ function sndRender() {
         cfgExtrasVisibility();
     });
     row2.append(tryBtn, applyBtn, impMsg);
+
+    // Exporters: current melody -> downloadable .mid / .rtttl / .csv
+    const exRow = document.createElement('div');
+    exRow.className = 'actions';
+    const exLabel = document.createElement('span');
+    exLabel.className = 'msg';
+    exLabel.textContent = 'Export melody:';
+    const mkEx = (label, fn) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn sm';
+        b.textContent = label;
+        b.addEventListener('click', () => {
+            const seq = parseImport();
+            if (!seq) { impMsg.textContent = 'Nothing to export \u2014 import or paste a melody first'; return; }
+            fn(seq);
+        });
+        return b;
+    };
+    exRow.append(exLabel,
+        mkEx('.mid',   (s) => downloadBlob(seqToMidiBlob(s), 'melody.mid')),
+        mkEx('.rtttl', (s) => downloadBlob(new Blob([seqToRtttl(s, 'HotFetched')], { type: 'text/plain' }), 'melody.rtttl')),
+        mkEx('.txt',   (s) => downloadBlob(new Blob([s.flat().join(',')], { type: 'text/plain' }), 'melody.txt')));
 
     // Sound library (free-midi-chords, MIT) — install once, then browse.
     const lib = document.createElement('div');
@@ -712,10 +894,7 @@ function sndRender() {
             play.className = 'btn sm';
             play.textContent = '\u25B6';
             play.title = 'Play';
-            play.addEventListener('click', async () => {
-                const seq = await loadEntry(rel);
-                if (seq) playSeq(seq);
-            });
+            play.addEventListener('click', () => togglePlay(play, () => loadEntry(rel)));
             const applyRow = document.createElement('button');
             applyRow.type = 'button';
             applyRow.className = 'btn sm primary';
@@ -759,7 +938,7 @@ function sndRender() {
         }
     });
 
-    imp.append(ta, fileIn, target, row2, lib);
+    imp.append(ta, fileIn, target, row2, exRow, lib);
     box.appendChild(imp);
 }
 
@@ -793,7 +972,7 @@ function cfgExtrasVisibility() {
         b.className = 'btn sm';
         b.textContent = '\u25B6 Play';
         b.style.marginTop = '6px';
-        b.addEventListener('click', () => playSeq(startupSeq()));
+        b.addEventListener('click', () => togglePlay(b, () => startupSeq()));
         st.parentElement.appendChild(b);
     }
 }

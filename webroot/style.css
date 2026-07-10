@@ -235,3 +235,6 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .lib-item:hover { border-color: var(--accent); }
 .lib-item:hover .lib-name { color: var(--accent); }
 .lib-credit { margin-top: 6px; font-size: 11px; color: var(--muted); }
+
+/* Import melody card spans the full row */
+.snd-import-card { grid-column: 1 / -1; }
