@@ -73,7 +73,8 @@ switch ($action) {
 
     case 'file': {
         $rel = (string)($body['path'] ?? '');
-        $root = realpath(soundlib_dir());
+        // Index paths are relative to the midi/ subdirectory.
+        $root = realpath(soundlib_dir() . '/midi');
         $abs  = $root !== false ? realpath($root . '/' . $rel) : false;
         if ($root === false || $abs === false || !str_starts_with($abs, $root . '/')
             || !str_ends_with(strtolower($abs), '.mid') || !is_file($abs)) {
