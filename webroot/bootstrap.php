@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.2.0';
+const HF_VERSION = '2.2.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1103,6 +1103,113 @@ function bootscreen_generate(string $imgPath, array $opts = []): array|string
     imagedestroy($canvas);
 
     return ['header' => $header, 'preview_b64' => base64_encode($png), 'target' => $target];
+}
+
+/* --------------------------------------------- TFT color image (RGB565) */
+
+/**
+ * TFT display image specs. BTT TFT touch firmware reads a 16-bit (RGB565) BMP
+ * with bottom-up (positive-height) row order from a per-model folder on the
+ * SD card root. Dimensions match each panel.
+ */
+function tft_image_specs(): array
+{
+    return [
+        'btt_tft70' => ['w' => 1024, 'h' => 600, 'folder' => 'TFT70', 'file' => 'bmp/boot/booting.bmp'],
+        'btt_tft50' => ['w' => 800,  'h' => 480, 'folder' => 'TFT50', 'file' => 'bmp/boot/booting.bmp'],
+        'btt_tft43' => ['w' => 480,  'h' => 272, 'folder' => 'TFT43', 'file' => 'bmp/boot/booting.bmp'],
+        'btt_tft35' => ['w' => 480,  'h' => 320, 'folder' => 'TFT35', 'file' => 'bmp/boot/booting.bmp'],
+    ];
+}
+
+/**
+ * Convert an uploaded image into a TFT-ready 16-bit (RGB565) BMP, scaled to fit
+ * the panel and letterboxed on black. Returns ['bmp' => binary, 'preview_b64' =>
+ * ..., 'spec' => ...] or an error string.
+ */
+function tft_image_generate(string $imgPath, string $model): array|string
+{
+    if (!function_exists('imagecreatefromstring')) {
+        return 'GD extension not available in this build';
+    }
+    $specs = tft_image_specs();
+    if (!isset($specs[$model])) {
+        return 'Unknown TFT model';
+    }
+    $W = $specs[$model]['w'];
+    $H = $specs[$model]['h'];
+
+    $raw = @file_get_contents($imgPath);
+    if ($raw === false) {
+        return 'Could not read uploaded image';
+    }
+    $src = @imagecreatefromstring($raw);
+    if ($src === false) {
+        return 'Unsupported image format (use PNG or JPEG)';
+    }
+    $sw = imagesx($src);
+    $sh = imagesy($src);
+    $scale = min($W / $sw, $H / $sh);
+    $dw = max(1, (int)round($sw * $scale));
+    $dh = max(1, (int)round($sh * $scale));
+
+    $canvas = imagecreatetruecolor($W, $H);
+    imagefilledrectangle($canvas, 0, 0, $W, $H, imagecolorallocate($canvas, 0, 0, 0));
+    imagecopyresampled($canvas, $src, (int)(($W - $dw) / 2), (int)(($H - $dh) / 2), 0, 0, $dw, $dh, $sw, $sh);
+    imagedestroy($src);
+
+    // Build a 16-bit BMP (BITMAPINFOHEADER, BI_BITFIELDS RGB565), bottom-up.
+    $rowBytes = $W * 2;
+    $pad = (4 - ($rowBytes % 4)) % 4; // BMP rows padded to 4 bytes
+    $imageSize = ($rowBytes + $pad) * $H;
+    $pixelOffset = 14 + 40 + 12; // file header + info header + 3 bitfield masks
+    $fileSize = $pixelOffset + $imageSize;
+
+    // BITMAPFILEHEADER (14)
+    $bmp = 'BM'
+         . pack('V', $fileSize)
+         . pack('v', 0) . pack('v', 0)
+         . pack('V', $pixelOffset);
+    // BITMAPINFOHEADER (40), compression = 3 (BI_BITFIELDS), 16 bpp
+    $bmp .= pack('V', 40)
+         . pack('V', $W)
+         . pack('V', $H)          // positive = bottom-up rows
+         . pack('v', 1)
+         . pack('v', 16)
+         . pack('V', 3)
+         . pack('V', $imageSize)
+         . pack('V', 2835) . pack('V', 2835) // ~72 DPI
+         . pack('V', 0) . pack('V', 0);
+    // RGB565 channel masks
+    $bmp .= pack('V', 0xF800) . pack('V', 0x07E0) . pack('V', 0x001F);
+
+    // Pixel data, bottom row first.
+    $padBytes = str_repeat("\x00", $pad);
+    for ($y = $H - 1; $y >= 0; $y--) {
+        $row = '';
+        for ($x = 0; $x < $W; $x++) {
+            $rgb = imagecolorat($canvas, $x, $y);
+            $r = ($rgb >> 16) & 0xFF;
+            $g = ($rgb >> 8) & 0xFF;
+            $b = $rgb & 0xFF;
+            $v = (($r & 0xF8) << 8) | (($g & 0xFC) << 3) | ($b >> 3);
+            $row .= pack('v', $v);
+        }
+        $bmp .= $row . $padBytes;
+    }
+
+    // Preview PNG (downscaled for the browser).
+    $pvW = 320;
+    $pvH = max(1, (int)round($H * $pvW / $W));
+    $pv = imagecreatetruecolor($pvW, $pvH);
+    imagecopyresampled($pv, $canvas, 0, 0, 0, 0, $pvW, $pvH, $W, $H);
+    ob_start();
+    imagepng($pv);
+    $png = ob_get_clean();
+    imagedestroy($pv);
+    imagedestroy($canvas);
+
+    return ['bmp' => $bmp, 'preview_b64' => base64_encode($png), 'spec' => $specs[$model]];
 }
 
 /* ------------------------------------------------------- Sound library */

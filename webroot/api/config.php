@@ -104,13 +104,17 @@ switch ($action) {
         }
 
         $mono = [];
+        $extFw = [];
         foreach (($board['marlin']['screens'] ?? []) as $s) {
             if ($s['type'] === 'mono128x64') {
                 $mono[] = $s['id'];
+            } elseif ($s['type'] === 'serial_tft') {
+                $extFw[] = $s['id'];
             }
         }
         json_out(['ok' => true, 'fields' => $fields, 'values' => $current,
-                  'meta' => ['mono_screens' => $mono, 'event_presets' => HF_EVENT_PRESETS]]);
+                  'meta' => ['mono_screens' => $mono, 'external_fw_screens' => $extFw,
+                             'event_presets' => HF_EVENT_PRESETS]]);
     }
 
     case 'save': {
@@ -237,6 +241,38 @@ switch ($action) {
         }
 
         json_out(['ok' => true, 'preview_b64' => $result['preview_b64'], 'target' => $target]);
+    }
+
+    case 'tftimage': {
+        [$p, $board, , , ] = load_config_context($body);
+
+        $file = $_FILES['image'] ?? null;
+        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            json_out(['ok' => false, 'error' => 'No image uploaded'], 422);
+        }
+        if ((int)$file['size'] > 8 * 1024 * 1024) {
+            json_out(['ok' => false, 'error' => 'Image too large (8 MB max)'], 422);
+        }
+        $model = (string)($_POST['tft_model'] ?? 'btt_tft70');
+        $previewOnly = (string)($_POST['preview_only'] ?? '0') === '1';
+
+        $result = tft_image_generate((string)$file['tmp_name'], $model);
+        if (is_string($result)) {
+            json_out(['ok' => false, 'error' => $result], 422);
+        }
+
+        if ($previewOnly) {
+            json_out(['ok' => true, 'preview_b64' => $result['preview_b64'],
+                      'spec' => $result['spec'], 'model' => $model]);
+        }
+
+        // Serve the BMP as a download (this file goes on the TFT's SD card).
+        $dl = 'booting.bmp';
+        header('Content-Type: image/bmp');
+        header('Content-Disposition: attachment; filename="' . $dl . '"');
+        header('Content-Length: ' . (string)strlen($result['bmp']));
+        echo $result['bmp'];
+        exit;
     }
 
     default:

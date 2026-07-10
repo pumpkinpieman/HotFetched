@@ -125,7 +125,8 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 
                 <div id="bsBlock" hidden>
                     <h3 class="cfg-group">Boot &amp; Status Images (128&times;64 monochrome LCD)</h3>
-                    <p class="empty">Full-color images are converted to a 1-bit bitmap &mdash; that's what the LCD hardware can display. Tune the conversion below and preview live before installing.</p>
+                    <p class="empty">For 128&times;64 monochrome LCDs. Full-color images are converted to a 1-bit bitmap &mdash; that's what the hardware displays. Enable &ldquo;Show boot screen&rdquo; or &ldquo;custom status screen image&rdquo; above to use this even before selecting a display. Tune the conversion and preview live before installing.</p>
+                    <p class="cfg-warning" id="bsExtWarn" hidden>Your selected display (BTT TFT in touch mode) runs its own firmware &mdash; a Marlin boot image won't appear on it. Set the TFT boot image by copying a .bmp into the <code>BIGTREETECH</code> folder on the <em>TFT's</em> SD card instead. The image below still applies if you switch to the TFT's &ldquo;Marlin mode&rdquo; or add a mono LCD.</p>
                     <div class="src-grid">
                         <div class="src-card">
                             <label>Image target
@@ -152,6 +153,48 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
                             <h3>Preview (as the LCD will show it)</h3>
                             <img id="bsPreview" alt="Image preview" class="bs-preview">
                         </div>
+                    </div>
+                </div>
+
+                <div id="tftBlock" hidden>
+                    <h3 class="cfg-group">TFT Boot Logo (color touchscreen)</h3>
+                    <p class="empty">Your display runs its own firmware, so this boot logo isn't compiled into Marlin &mdash; it's a color <code>.bmp</code> you copy onto the <em>TFT's</em> SD card. HotFetched converts your image to the exact 16-bit format the TFT expects and gives you the file plus install steps.</p>
+                    <div class="src-grid">
+                        <div class="src-card">
+                            <label>TFT model
+                                <select id="tftModel">
+                                    <option value="btt_tft70">BTT TFT70 (1024&times;600)</option>
+                                    <option value="btt_tft50">BTT TFT50 (800&times;480)</option>
+                                    <option value="btt_tft43">BTT TFT43 (480&times;272)</option>
+                                    <option value="btt_tft35">BTT TFT35 (480&times;320)</option>
+                                </select>
+                            </label>
+                            <label>Boot image (PNG/JPEG, max 8 MB)
+                                <input type="file" id="tftFile" accept="image/png,image/jpeg">
+                            </label>
+                            <div class="actions">
+                                <button type="button" class="btn" id="tftPreviewBtn">Preview</button>
+                                <button type="button" class="btn primary" id="tftDownloadBtn">Download booting.bmp</button>
+                                <span class="msg" id="tftMsg"></span>
+                            </div>
+                        </div>
+                        <div class="src-card" id="tftPreviewCard" hidden>
+                            <h3>Preview (fitted to the panel)</h3>
+                            <img id="tftPreview" alt="TFT boot logo preview" class="bs-preview">
+                        </div>
+                    </div>
+                    <div id="tftInstructions" class="tft-steps" hidden>
+                        <h3>Install on your TFT</h3>
+                        <ol>
+                            <li>Download <code>booting.bmp</code> above.</li>
+                            <li>On a FAT32-formatted SD card, create a folder named <code id="tftFolderName">TFT70</code> at the root.</li>
+                            <li>Inside it, create <code>bmp</code>, then <code>boot</code> &mdash; so the path is <code id="tftPath">TFT70/bmp/boot/</code>.</li>
+                            <li>Copy <code>booting.bmp</code> into that <code>boot</code> folder.</li>
+                            <li>Power off the printer, insert the SD card into the <em>TFT's own</em> card slot (not the mainboard's).</li>
+                            <li>Power on. The TFT reads the folder and updates its graphics; the new logo shows on the next boot.</li>
+                            <li>Once it's applied, you can remove the SD card.</li>
+                        </ol>
+                        <p class="empty">Filenames and folder names are case-sensitive on the TFT &mdash; keep them exactly as shown. This is independent of the Marlin firmware you build here; both can be flashed separately.</p>
                     </div>
                 </div>
 
@@ -1016,7 +1059,23 @@ function startupSeq() {
 
 function cfgExtrasVisibility() {
     const screen = document.getElementById('cf_screen');
-    if (el('bsBlock')) el('bsBlock').hidden = !(screen && CFG_META.mono_screens.includes(screen.value));
+    // Show the image uploader when a mono screen is selected OR when the user
+    // has enabled a custom boot/status image (they may attach the display later,
+    // and the boot logo renders on any graphical LCD, not just the mono presets).
+    const monoScreen = screen && CFG_META.mono_screens.includes(screen.value);
+    const showBoot = document.getElementById('cf_show_bootscreen');
+    const customStatus = document.getElementById('cf_custom_status_image');
+    const wantsImage = (showBoot && showBoot.checked) || (customStatus && customStatus.checked);
+    if (el('bsBlock')) el('bsBlock').hidden = !(monoScreen || wantsImage);
+
+    // External-firmware TFTs (BTT TFT touch mode) don't render a Marlin-compiled
+    // _Bootscreen.h — their boot image is a color BMP on the TFT's own SD card.
+    // Show the dedicated TFT panel and flag the mono uploader as not-for-this-screen.
+    const extScreens = (CFG_META.external_fw_screens || []);
+    const isExternal = screen && extScreens.includes(screen.value);
+    const warn = el('bsExtWarn');
+    if (warn) warn.hidden = !isExternal;
+    if (el('tftBlock')) el('tftBlock').hidden = !isExternal;
     if (el('sndBlock')) el('sndBlock').hidden = false;
     sndRender();
 
@@ -1157,6 +1216,73 @@ if (cfgForm) {
     }
     el('bsPreviewBtn')?.addEventListener('click', () => bsSend(true));
     el('bsUploadBtn')?.addEventListener('click', () => bsSend(false));
+
+    // TFT color boot logo: preview (JSON) or download (BMP file).
+    const tftFolders = {
+        btt_tft70: 'TFT70', btt_tft50: 'TFT50', btt_tft43: 'TFT43', btt_tft35: 'TFT35'
+    };
+    function tftUpdateInstructions() {
+        const m = el('tftModel') ? el('tftModel').value : 'btt_tft70';
+        const folder = tftFolders[m] || 'TFT70';
+        if (el('tftFolderName')) el('tftFolderName').textContent = folder;
+        if (el('tftPath')) el('tftPath').textContent = folder + '/bmp/boot/';
+    }
+    el('tftModel')?.addEventListener('change', tftUpdateInstructions);
+    tftUpdateInstructions();
+
+    async function tftPreview() {
+        const f = el('tftFile').files[0];
+        if (!f) { el('tftMsg').textContent = 'Choose an image first'; return; }
+        el('tftMsg').textContent = 'Rendering preview\u2026';
+        const fd = new FormData();
+        fd.append('action', 'tftimage');
+        fd.append('csrf', CSRF);
+        fd.append('id', String(PROJECT_ID));
+        fd.append('image', f);
+        fd.append('tft_model', el('tftModel').value);
+        fd.append('preview_only', '1');
+        let res;
+        try {
+            const r = await fetch('api/config.php', { method: 'POST', body: fd });
+            res = await r.json();
+        } catch { res = { ok: false, error: 'Upload failed' }; }
+        if (res.ok) {
+            el('tftPreview').src = 'data:image/png;base64,' + res.preview_b64;
+            el('tftPreviewCard').hidden = false;
+            el('tftInstructions').hidden = false;
+            el('tftMsg').textContent = 'Preview ready \u2014 download the BMP when it looks right';
+        } else {
+            el('tftMsg').textContent = res.error || 'Preview failed';
+        }
+    }
+
+    function tftDownload() {
+        const f = el('tftFile').files[0];
+        if (!f) { el('tftMsg').textContent = 'Choose an image first'; return; }
+        el('tftMsg').textContent = 'Generating BMP\u2026';
+        // Build a form POST that returns the file as a download.
+        const fd = new FormData();
+        fd.append('action', 'tftimage');
+        fd.append('csrf', CSRF);
+        fd.append('id', String(PROJECT_ID));
+        fd.append('image', f);
+        fd.append('tft_model', el('tftModel').value);
+        fd.append('preview_only', '0');
+        fetch('api/config.php', { method: 'POST', body: fd })
+            .then(r => r.ok ? r.blob() : r.json().then(j => Promise.reject(j.error || 'Failed')))
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'booting.bmp';
+                document.body.appendChild(a); a.click();
+                document.body.removeChild(a); URL.revokeObjectURL(url);
+                el('tftMsg').textContent = 'Downloaded booting.bmp \u2014 follow the steps below';
+                el('tftInstructions').hidden = false;
+            })
+            .catch(err => { el('tftMsg').textContent = typeof err === 'string' ? err : 'Download failed'; });
+    }
+    el('tftPreviewBtn')?.addEventListener('click', tftPreview);
+    el('tftDownloadBtn')?.addEventListener('click', tftDownload);
 
     cfgForm.addEventListener('submit', async (e) => {
         e.preventDefault();

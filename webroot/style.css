@@ -280,3 +280,12 @@ a.btn { text-decoration: none; display: inline-block; }
 /* Boot/status image controls */
 .bs-range { display: block; }
 .bs-range input[type="range"] { width: 100%; margin-top: 4px; }
+
+/* External-firmware TFT warning inherits .cfg-warning (red, bold) */
+#bsExtWarn code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; }
+
+/* TFT boot-logo instructions */
+.tft-steps { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.tft-steps ol { margin: 8px 0 8px 20px; padding: 0; }
+.tft-steps li { margin: 5px 0; font-size: 13.5px; }
+.tft-steps code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
