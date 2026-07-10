@@ -66,10 +66,16 @@ function load_config_context(array $body): array
 switch ($action) {
 
     case 'get': {
-        [$p, $board, $doc, , ] = load_config_context($body);
+        [$p, $board, $doc, , $advPath] = load_config_context($body);
 
-        $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_extended($board));
-        $current = array_merge(marlin_current_values($doc), marlin_current_values_extended($doc, $board));
+        $adv = marlin_config_parse($advPath);
+        if ($adv === null) {
+            json_out(['ok' => false, 'error' => 'Unable to read Configuration_adv.h'], 500);
+        }
+        $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
+                               marlin_field_defs_adv($board), marlin_field_defs_extended($board));
+        $current = array_merge(marlin_current_values($doc), marlin_current_values_tier1($doc, $adv),
+                               marlin_current_values_extended($doc, $board));
 
         // Saved values (from a previous submit) override file-derived ones.
         $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
@@ -89,9 +95,14 @@ switch ($action) {
     }
 
     case 'save': {
-        [$p, $board, $doc, $confPath, ] = load_config_context($body);
+        [$p, $board, $doc, $confPath, $advPath] = load_config_context($body);
 
-        $fields = array_merge(marlin_field_defs($board), marlin_field_defs_extended($board));
+        $adv = marlin_config_parse($advPath);
+        if ($adv === null) {
+            json_out(['ok' => false, 'error' => 'Unable to read Configuration_adv.h'], 500);
+        }
+        $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
+                              marlin_field_defs_adv($board), marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
         [$values, $errors] = hf_validate_fields($fields, $input);
 
@@ -115,14 +126,20 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Database error'], 500);
         }
 
-        // Apply to Configuration.h (surgical line edits).
+        // Apply to both configuration files (surgical line edits).
         $applied = array_merge(
             marlin_apply_values($doc, $values, $board),
+            marlin_apply_values_motion($doc, $values),
             marlin_apply_values_extended($doc, $values, $board)
         );
+        $appliedAdv = marlin_apply_values_adv($adv, $values);
         if (!marlin_config_write($doc, $confPath)) {
             json_out(['ok' => false, 'error' => 'Could not write Configuration.h'], 500);
         }
+        if ($appliedAdv !== [] && !marlin_config_write($adv, $advPath)) {
+            json_out(['ok' => false, 'error' => 'Could not write Configuration_adv.h'], 500);
+        }
+        $applied = array_merge($applied, $appliedAdv);
 
         $pdo->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$p['id']]);
 

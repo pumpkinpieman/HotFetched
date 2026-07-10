@@ -308,6 +308,31 @@ function build_dir(int $projectId, int $buildId): string
 }
 
 /**
+ * Sweep ALL stale builds (any project): queued with no worker signs for 3
+ * minutes, or active with a silent log for 15 minutes. Called on every
+ * build API hit so abandoned pages can't strand rows forever.
+ */
+function builds_sweep_stale(): void
+{
+    $rows = db()->query(
+        "SELECT id, status, log_path, started_at FROM builds
+         WHERE status IN ('queued','validating','building')"
+    )->fetchAll();
+    foreach ($rows as $b) {
+        $hasLog = is_string($b['log_path']) && is_file($b['log_path']);
+        $ref = $hasLog
+            ? (int)filemtime($b['log_path'])
+            : ($b['started_at'] !== null ? (int)strtotime((string)$b['started_at'] . ' UTC') : 0);
+        $limit = (!$hasLog && $b['status'] === 'queued') ? 180 : 900;
+        if ($ref > 0 && time() - $ref > $limit) {
+            db()->prepare("UPDATE builds SET status = 'failed', finished_at = datetime('now')
+                           WHERE id = ? AND status IN ('queued','validating','building')")
+                ->execute([(int)$b['id']]);
+        }
+    }
+}
+
+/**
  * Detached worker launch (FarFetched pattern) — never blocks the request.
  */
 function source_worker_launch(int $projectId): void
@@ -615,8 +640,12 @@ function marlin_field_defs(array $board): array
         ['key' => 'homing_xy', 'label' => 'Homing speed XY (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 5, 'max' => 150],
         ['key' => 'homing_z',  'label' => 'Homing speed Z (mm/s)',  'group' => 'Speed', 'type' => 'int', 'min' => 1, 'max' => 30],
 
-        ['key' => 'hotend_maxtemp', 'label' => 'Nozzle max temp (°C)', 'group' => 'Thermal', 'type' => 'int', 'min' => 150, 'max' => (int)$lim['max_hotend_temp']],
-        ['key' => 'bed_maxtemp',    'label' => 'Bed max temp (°C)',    'group' => 'Thermal', 'type' => 'int', 'min' => 60,  'max' => (int)$lim['max_bed_temp']],
+        ['key' => 'thermal_override', 'label' => 'Override thermal limits', 'group' => 'Thermal', 'type' => 'bool',
+         'warning_text' => "Only override if you know what you're doing!"],
+        ['key' => 'hotend_maxtemp', 'label' => 'Nozzle max temp (°C)', 'group' => 'Thermal', 'type' => 'int', 'min' => 150, 'max' => (int)$lim['max_hotend_temp'],
+         'override_key' => 'thermal_override', 'override_max' => 999],
+        ['key' => 'bed_maxtemp',    'label' => 'Bed max temp (°C)',    'group' => 'Thermal', 'type' => 'int', 'min' => 60,  'max' => (int)$lim['max_bed_temp'],
+         'override_key' => 'thermal_override', 'override_max' => 300],
         ['key' => 'temp_sensor_0',   'label' => 'Hotend temp sensor (TEMP_SENSOR_0)',  'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
         ['key' => 'temp_sensor_bed', 'label' => 'Bed temp sensor (TEMP_SENSOR_BED)',   'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
     ];
@@ -1114,10 +1143,17 @@ function hf_validate_fields(array $fields, array $input): array
                     $values[$key] = '';
                     break;
                 }
+                // Overridable ceiling: when the linked override flag is set,
+                // the hard override_max replaces the board limit.
+                $max = $f['max'] ?? null;
+                if (isset($f['override_key'], $f['override_max'])
+                    && (string)($input[$f['override_key']] ?? '') === '1') {
+                    $max = $f['override_max'];
+                }
                 if (isset($f['min']) && $n < $f['min']) {
                     $errors[$key] = 'Minimum ' . $f['min'];
-                } elseif (isset($f['max']) && $n > $f['max']) {
-                    $errors[$key] = 'Maximum ' . $f['max'] . ' for this board';
+                } elseif ($max !== null && $n > $max) {
+                    $errors[$key] = 'Maximum ' . $max . ' for this board';
                 }
                 $values[$key] = (string)$n;
                 break;
@@ -1152,4 +1188,186 @@ function hf_validate_fields(array $fields, array $input): array
     }
 
     return [$values, $errors];
+}
+
+/* --------------------------------------- Tier 1: motion / TMC / endstops */
+
+/** Tier-1 fields living in Configuration.h. */
+function marlin_field_defs_motion(array $board): array
+{
+    $tmc = ['TMC2209', 'TMC2208', 'TMC2130', 'TMC5160'];
+    return [
+        ['key' => 'kinematics', 'label' => 'Kinematics', 'group' => 'Kinematics', 'type' => 'select',
+         'options' => ['cartesian', 'corexy'],
+         'option_labels' => ['cartesian' => 'Cartesian (bedslinger / i3)', 'corexy' => 'CoreXY']],
+
+        ['key' => 'steps_x', 'label' => 'Steps/mm X', 'group' => 'Motion', 'type' => 'float', 'min' => 1, 'max' => 3200],
+        ['key' => 'steps_y', 'label' => 'Steps/mm Y', 'group' => 'Motion', 'type' => 'float', 'min' => 1, 'max' => 3200],
+        ['key' => 'steps_z', 'label' => 'Steps/mm Z', 'group' => 'Motion', 'type' => 'float', 'min' => 1, 'max' => 6400],
+        ['key' => 'steps_e', 'label' => 'Steps/mm E', 'group' => 'Motion', 'type' => 'float', 'min' => 1, 'max' => 6400],
+
+        ['key' => 'accel_max_x', 'label' => 'Max accel X (mm/s²)', 'group' => 'Motion', 'type' => 'int', 'min' => 100, 'max' => 30000],
+        ['key' => 'accel_max_y', 'label' => 'Max accel Y (mm/s²)', 'group' => 'Motion', 'type' => 'int', 'min' => 100, 'max' => 30000],
+        ['key' => 'accel_max_z', 'label' => 'Max accel Z (mm/s²)', 'group' => 'Motion', 'type' => 'int', 'min' => 10,  'max' => 5000],
+        ['key' => 'accel_max_e', 'label' => 'Max accel E (mm/s²)', 'group' => 'Motion', 'type' => 'int', 'min' => 100, 'max' => 30000],
+        ['key' => 'accel_print',   'label' => 'Print acceleration (mm/s²)',   'group' => 'Motion', 'type' => 'int', 'min' => 50, 'max' => 30000],
+        ['key' => 'accel_retract', 'label' => 'Retract acceleration (mm/s²)', 'group' => 'Motion', 'type' => 'int', 'min' => 50, 'max' => 30000],
+        ['key' => 'accel_travel',  'label' => 'Travel acceleration (mm/s²)',  'group' => 'Motion', 'type' => 'int', 'min' => 50, 'max' => 30000],
+        ['key' => 'junction_dev',  'label' => 'Junction deviation (mm)',      'group' => 'Motion', 'type' => 'float', 'min' => 0.001, 'max' => 0.3],
+
+        ['key' => 'invert_x',  'label' => 'Invert X motor direction',  'group' => 'Motion', 'type' => 'bool'],
+        ['key' => 'invert_y',  'label' => 'Invert Y motor direction',  'group' => 'Motion', 'type' => 'bool'],
+        ['key' => 'invert_z',  'label' => 'Invert Z motor direction',  'group' => 'Motion', 'type' => 'bool'],
+        ['key' => 'invert_e0', 'label' => 'Invert E0 motor direction', 'group' => 'Motion', 'type' => 'bool'],
+
+        ['key' => 'endstop_x', 'label' => 'X endstop hit state', 'group' => 'Endstops', 'type' => 'select', 'options' => ['HIGH', 'LOW']],
+        ['key' => 'endstop_y', 'label' => 'Y endstop hit state', 'group' => 'Endstops', 'type' => 'select', 'options' => ['HIGH', 'LOW']],
+        ['key' => 'endstop_z', 'label' => 'Z endstop hit state', 'group' => 'Endstops', 'type' => 'select', 'options' => ['HIGH', 'LOW']],
+    ];
+}
+
+/** Tier-1 fields living in Configuration_adv.h (TMC block). */
+function marlin_field_defs_adv(array $board): array
+{
+    $tmcDrivers = ['TMC2209', 'TMC2208', 'TMC2130', 'TMC5160'];
+    $sgDrivers  = ['TMC2209', 'TMC2130', 'TMC5160']; // StallGuard-capable
+
+    return [
+        ['key' => 'tmc_current_x',  'label' => 'X driver current (mA RMS)',  'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => 100, 'max' => 2000,
+         'requires' => ['driver_x' => $tmcDrivers]],
+        ['key' => 'tmc_current_y',  'label' => 'Y driver current (mA RMS)',  'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => 100, 'max' => 2000,
+         'requires' => ['driver_y' => $tmcDrivers]],
+        ['key' => 'tmc_current_z',  'label' => 'Z driver current (mA RMS)',  'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => 100, 'max' => 2000,
+         'requires' => ['driver_z' => $tmcDrivers]],
+        ['key' => 'tmc_current_e0', 'label' => 'E0 driver current (mA RMS)', 'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => 100, 'max' => 2000,
+         'requires' => ['driver_e0' => $tmcDrivers]],
+
+        ['key' => 'sensorless_homing', 'label' => 'Sensorless homing (StallGuard — no X/Y endstop switches)', 'group' => 'Stepper Drivers (advanced)', 'type' => 'bool',
+         'requires' => ['driver_x' => $sgDrivers]],
+        ['key' => 'stall_x', 'label' => 'X stall sensitivity (higher = more sensitive)', 'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => -64, 'max' => 255,
+         'requires' => ['sensorless_homing' => ['1']]],
+        ['key' => 'stall_y', 'label' => 'Y stall sensitivity', 'group' => 'Stepper Drivers (advanced)', 'type' => 'int', 'min' => -64, 'max' => 255,
+         'requires' => ['sensorless_homing' => ['1']]],
+    ];
+}
+
+/** Current values for Tier-1 fields from both parsed documents. */
+function marlin_current_values_tier1(array $doc, array $adv): array
+{
+    $d = $doc['defines'];
+    $a = $adv['defines'];
+    $num = function (array $src, string $k): ?string {
+        $e = $src[$k] ?? null;
+        if ($e === null || $e['value'] === null) return null;
+        return preg_match('/-?\d+(?:\.\d+)?/', (string)$e['value'], $m) ? $m[0] : null;
+    };
+    $flag = fn (array $src, string $k): string => ($src[$k]['enabled'] ?? false) ? '1' : '0';
+    $bool = function (array $src, string $k): string {
+        $v = strtolower(trim((string)($src[$k]['value'] ?? 'false')));
+        return $v === 'true' ? '1' : '0';
+    };
+
+    [$sx, $sy, $sz, $se] = marlin_extract_numbers($d['DEFAULT_AXIS_STEPS_PER_UNIT']['value'] ?? null, 4);
+    [$ax, $ay, $az, $ae] = marlin_extract_numbers($d['DEFAULT_MAX_ACCELERATION']['value'] ?? null, 4);
+
+    $endstop = function (string $axis) use ($d): string {
+        $hit = $d[$axis . '_MIN_ENDSTOP_HIT_STATE'] ?? null;
+        if ($hit !== null) {
+            return strtoupper(trim((string)$hit['value'])) === 'LOW' ? 'LOW' : 'HIGH';
+        }
+        $inv = $d[$axis . '_MIN_ENDSTOP_INVERTING'] ?? null; // older Marlin naming
+        if ($inv !== null) {
+            return strtolower(trim((string)$inv['value'])) === 'true' ? 'LOW' : 'HIGH';
+        }
+        return 'HIGH';
+    };
+
+    $fmt = fn ($v) => $v !== null ? rtrim(rtrim(sprintf('%.3f', (float)$v), '0'), '.') : null;
+
+    return [
+        'kinematics' => ($d['COREXY']['enabled'] ?? false) ? 'corexy' : 'cartesian',
+        'steps_x' => $fmt($sx), 'steps_y' => $fmt($sy), 'steps_z' => $fmt($sz), 'steps_e' => $fmt($se),
+        'accel_max_x' => $ax !== null ? (string)(int)$ax : null,
+        'accel_max_y' => $ay !== null ? (string)(int)$ay : null,
+        'accel_max_z' => $az !== null ? (string)(int)$az : null,
+        'accel_max_e' => $ae !== null ? (string)(int)$ae : null,
+        'accel_print'   => $num($d, 'DEFAULT_ACCELERATION'),
+        'accel_retract' => $num($d, 'DEFAULT_RETRACT_ACCELERATION'),
+        'accel_travel'  => $num($d, 'DEFAULT_TRAVEL_ACCELERATION'),
+        'junction_dev'  => $num($d, 'JUNCTION_DEVIATION_MM') ?? '0.013',
+        'invert_x' => $bool($d, 'INVERT_X_DIR'), 'invert_y' => $bool($d, 'INVERT_Y_DIR'),
+        'invert_z' => $bool($d, 'INVERT_Z_DIR'), 'invert_e0' => $bool($d, 'INVERT_E0_DIR'),
+        'endstop_x' => $endstop('X'), 'endstop_y' => $endstop('Y'), 'endstop_z' => $endstop('Z'),
+        'tmc_current_x'  => $num($a, 'X_CURRENT')  ?? '800',
+        'tmc_current_y'  => $num($a, 'Y_CURRENT')  ?? '800',
+        'tmc_current_z'  => $num($a, 'Z_CURRENT')  ?? '800',
+        'tmc_current_e0' => $num($a, 'E0_CURRENT') ?? '800',
+        'sensorless_homing' => $flag($a, 'SENSORLESS_HOMING'),
+        'stall_x' => $num($a, 'X_STALL_SENSITIVITY') ?? '8',
+        'stall_y' => $num($a, 'Y_STALL_SENSITIVITY') ?? '8',
+    ];
+}
+
+/** Apply Tier-1 values to Configuration.h. */
+function marlin_apply_values_motion(array &$doc, array $v): array
+{
+    $applied = [];
+    $set = function (string $key, ?string $value, bool $enable = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $key, $value, $enable)) {
+            $applied[] = $key;
+        }
+    };
+    $f = fn (string $n): string => rtrim(rtrim(sprintf('%.3f', (float)$n), '0'), '.');
+
+    $set('COREXY', null, ($v['kinematics'] ?? 'cartesian') === 'corexy');
+
+    $set('DEFAULT_AXIS_STEPS_PER_UNIT', sprintf('{ %s, %s, %s, %s }',
+        $f($v['steps_x']), $f($v['steps_y']), $f($v['steps_z']), $f($v['steps_e'])));
+    $set('DEFAULT_MAX_ACCELERATION', sprintf('{ %d, %d, %d, %d }',
+        (int)$v['accel_max_x'], (int)$v['accel_max_y'], (int)$v['accel_max_z'], (int)$v['accel_max_e']));
+    $set('DEFAULT_ACCELERATION', (string)(int)$v['accel_print']);
+    $set('DEFAULT_RETRACT_ACCELERATION', (string)(int)$v['accel_retract']);
+    $set('DEFAULT_TRAVEL_ACCELERATION', (string)(int)$v['accel_travel']);
+    $set('JUNCTION_DEVIATION_MM', $f($v['junction_dev']));
+
+    foreach (['x' => 'INVERT_X_DIR', 'y' => 'INVERT_Y_DIR', 'z' => 'INVERT_Z_DIR', 'e0' => 'INVERT_E0_DIR'] as $k => $def) {
+        $set($def, ($v['invert_' . $k] ?? '0') === '1' ? 'true' : 'false');
+    }
+
+    foreach (['X', 'Y', 'Z'] as $axis) {
+        $want = ($v['endstop_' . strtolower($axis)] ?? 'HIGH') === 'LOW' ? 'LOW' : 'HIGH';
+        if (isset($doc['defines'][$axis . '_MIN_ENDSTOP_HIT_STATE'])) {
+            $set($axis . '_MIN_ENDSTOP_HIT_STATE', $want);
+        } elseif (isset($doc['defines'][$axis . '_MIN_ENDSTOP_INVERTING'])) {
+            $set($axis . '_MIN_ENDSTOP_INVERTING', $want === 'LOW' ? 'true' : 'false');
+        }
+    }
+    return $applied;
+}
+
+/** Apply Tier-1 values to Configuration_adv.h (TMC block). */
+function marlin_apply_values_adv(array &$adv, array $v): array
+{
+    $applied = [];
+    $set = function (string $key, ?string $value, bool $enable = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $key, $value, $enable)) {
+            $applied[] = $key;
+        }
+    };
+    $keep = fn (string $key): ?string => $adv['defines'][$key]['value'] ?? null;
+
+    foreach (['x' => 'X_CURRENT', 'y' => 'Y_CURRENT', 'z' => 'Z_CURRENT', 'e0' => 'E0_CURRENT'] as $k => $def) {
+        $mA = (int)($v['tmc_current_' . $k] ?? 0);
+        if ($mA >= 100) {
+            $set($def, (string)$mA);
+        }
+    }
+
+    $sensorless = ($v['sensorless_homing'] ?? '0') === '1';
+    $set('SENSORLESS_HOMING', $keep('SENSORLESS_HOMING'), $sensorless);
+    if ($sensorless) {
+        $set('X_STALL_SENSITIVITY', (string)(int)$v['stall_x']);
+        $set('Y_STALL_SENSITIVITY', (string)(int)$v['stall_y']);
+    }
+    return $applied;
 }
