@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '1.1.0';
+const HF_VERSION = '1.2.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -823,6 +823,13 @@ function marlin_field_defs_extended(array $board): array
         ['key' => 'screen', 'label' => 'Screen / display', 'group' => 'Display',
          'type' => 'select', 'options' => $screenIds, 'option_labels' => $screenLabels],
 
+        ['key' => 'show_bootscreen', 'label' => 'Show boot screen on startup', 'group' => 'Boot & Display Images', 'type' => 'bool'],
+        ['key' => 'boot_logo_size', 'label' => 'Marlin boot logo', 'group' => 'Boot & Display Images', 'type' => 'select',
+         'options' => ['full', 'small', 'animated'],
+         'option_labels' => ['full' => 'Full Marlin logo', 'small' => 'Small logo (saves flash)', 'animated' => 'Animated logo (~3KB flash)'],
+         'requires' => ['show_bootscreen' => ['1']]],
+        ['key' => 'custom_status_image', 'label' => 'Enable custom status screen image', 'group' => 'Boot & Display Images', 'type' => 'bool'],
+
         ['key' => 'probe', 'label' => 'Bed probe', 'group' => 'Probe',
          'type' => 'select', 'options' => $probeIds, 'option_labels' => $probeLabels],
         ['key' => 'probe_off_x', 'label' => 'Probe offset X (mm)', 'group' => 'Probe',
@@ -880,7 +887,19 @@ function marlin_current_values_extended(array $doc, array $board): array
 
     [$px, $py, $pz] = marlin_extract_numbers($d['NOZZLE_TO_PROBE_OFFSET']['value'] ?? null, 3);
 
+    $showBoot = ($d['SHOW_BOOTSCREEN']['enabled'] ?? false) ? '1' : '0';
+    $bootLogo = 'full';
+    if ($d['BOOT_MARLIN_LOGO_ANIMATED']['enabled'] ?? false) {
+        $bootLogo = 'animated';
+    } elseif ($d['BOOT_MARLIN_LOGO_SMALL']['enabled'] ?? false) {
+        $bootLogo = 'small';
+    }
+    $customStatus = ($d['CUSTOM_STATUS_SCREEN_IMAGE']['enabled'] ?? false) ? '1' : '0';
+
     return [
+        'show_bootscreen' => $showBoot,
+        'boot_logo_size' => $bootLogo,
+        'custom_status_image' => $customStatus,
         'screen' => $screen,
         'probe'  => $probe,
         'probe_off_x' => $px !== null ? rtrim(rtrim(sprintf('%.2f', $px), '0'), '.') : '0',
@@ -967,11 +986,17 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
  * Floyd-Steinberg dithered). Returns ['header' => ..., 'preview_b64' => ...]
  * or an error string.
  */
-function bootscreen_generate(string $imgPath): array|string
+function bootscreen_generate(string $imgPath, array $opts = []): array|string
 {
     if (!function_exists('imagecreatefromstring')) {
         return 'GD extension not available in this build';
     }
+    // Options: target ('boot'|'status'), threshold (0-255), invert (bool), dither (bool).
+    $target    = ($opts['target'] ?? 'boot') === 'status' ? 'status' : 'boot';
+    $threshold = max(0, min(255, (int)($opts['threshold'] ?? 128)));
+    $invert    = (bool)($opts['invert'] ?? false);
+    $dither    = array_key_exists('dither', $opts) ? (bool)$opts['dither'] : true;
+
     $raw = @file_get_contents($imgPath);
     if ($raw === false) {
         return 'Could not read uploaded image';
@@ -994,7 +1019,6 @@ function bootscreen_generate(string $imgPath): array|string
     imagecopyresampled($canvas, $src, (int)(($W - $dw) / 2), (int)(($H - $dh) / 2), 0, 0, $dw, $dh, $sw, $sh);
     imagedestroy($src);
 
-    // Luminance buffer + Floyd-Steinberg dither to 1-bit.
     $lum = [];
     for ($y = 0; $y < $H; $y++) {
         for ($x = 0; $x < $W; $x++) {
@@ -1003,16 +1027,33 @@ function bootscreen_generate(string $imgPath): array|string
         }
     }
     $bits = [];
-    for ($y = 0; $y < $H; $y++) {
-        for ($x = 0; $x < $W; $x++) {
-            $old = $lum[$y][$x];
-            $new = $old < 128 ? 0 : 255;
-            $bits[$y][$x] = $new === 255 ? 1 : 0;
-            $err = $old - $new;
-            if ($x + 1 < $W)                 $lum[$y][$x + 1]     += $err * 7 / 16;
-            if ($y + 1 < $H && $x > 0)       $lum[$y + 1][$x - 1] += $err * 3 / 16;
-            if ($y + 1 < $H)                 $lum[$y + 1][$x]     += $err * 5 / 16;
-            if ($y + 1 < $H && $x + 1 < $W)  $lum[$y + 1][$x + 1] += $err * 1 / 16;
+    if ($dither) {
+        // Floyd-Steinberg error diffusion, thresholded.
+        for ($y = 0; $y < $H; $y++) {
+            for ($x = 0; $x < $W; $x++) {
+                $old = $lum[$y][$x];
+                $new = $old < $threshold ? 0 : 255;
+                $bits[$y][$x] = $new === 255 ? 1 : 0;
+                $err = $old - $new;
+                if ($x + 1 < $W)                 $lum[$y][$x + 1]     += $err * 7 / 16;
+                if ($y + 1 < $H && $x > 0)       $lum[$y + 1][$x - 1] += $err * 3 / 16;
+                if ($y + 1 < $H)                 $lum[$y + 1][$x]     += $err * 5 / 16;
+                if ($y + 1 < $H && $x + 1 < $W)  $lum[$y + 1][$x + 1] += $err * 1 / 16;
+            }
+        }
+    } else {
+        // Hard threshold, no diffusion.
+        for ($y = 0; $y < $H; $y++) {
+            for ($x = 0; $x < $W; $x++) {
+                $bits[$y][$x] = $lum[$y][$x] < $threshold ? 0 : 1;
+            }
+        }
+    }
+    if ($invert) {
+        for ($y = 0; $y < $H; $y++) {
+            for ($x = 0; $x < $W; $x++) {
+                $bits[$y][$x] ^= 1;
+            }
         }
     }
 
@@ -1029,15 +1070,24 @@ function bootscreen_generate(string $imgPath): array|string
         }
         $rows[] = '  ' . implode(', ', $bytes);
     }
+    $arr = implode(",\n", $rows);
 
-    $header = "/**\n * Custom bootscreen generated by HotFetched " . HF_VERSION . "\n */\n"
-        . "#pragma once\n\n"
-        . "#define CUSTOM_BOOTSCREEN_TIMEOUT 2500\n"
-        . "#define CUSTOM_BOOTSCREEN_BMPWIDTH {$W}\n\n"
-        . "const unsigned char custom_start_bmp[] PROGMEM = {\n"
-        . implode(",\n", $rows) . "\n};\n";
+    if ($target === 'status') {
+        $header = "/**\n * Custom status screen image generated by HotFetched " . HF_VERSION . "\n */\n"
+            . "#pragma once\n\n"
+            . "#define STATUS_SCREENWIDTH {$W}\n\n"
+            . "const unsigned char status_screen0_bmp[] PROGMEM = {\n"
+            . $arr . "\n};\n";
+    } else {
+        $header = "/**\n * Custom bootscreen generated by HotFetched " . HF_VERSION . "\n */\n"
+            . "#pragma once\n\n"
+            . "#define CUSTOM_BOOTSCREEN_TIMEOUT 2500\n"
+            . "#define CUSTOM_BOOTSCREEN_BMPWIDTH {$W}\n\n"
+            . "const unsigned char custom_start_bmp[] PROGMEM = {\n"
+            . $arr . "\n};\n";
+    }
 
-    // Preview: 3x upscaled PNG of the dithered result.
+    // Preview: 3x upscaled PNG of the 1-bit result.
     $pv = imagecreatetruecolor($W * 3, $H * 3);
     $on  = imagecolorallocate($pv, 230, 235, 242);
     $off = imagecolorallocate($pv, 14, 17, 22);
@@ -1052,7 +1102,7 @@ function bootscreen_generate(string $imgPath): array|string
     imagedestroy($pv);
     imagedestroy($canvas);
 
-    return ['header' => $header, 'preview_b64' => base64_encode($png)];
+    return ['header' => $header, 'preview_b64' => base64_encode($png), 'target' => $target];
 }
 
 /* ------------------------------------------------------- Sound library */
@@ -1378,6 +1428,17 @@ function marlin_apply_values_adv(array &$adv, array $v): array
         $set('X_STALL_SENSITIVITY', (string)(int)$v['stall_x']);
         $set('Y_STALL_SENSITIVITY', (string)(int)$v['stall_y']);
     }
+
+    // Boot & display images (all in Configuration_adv.h).
+    $showBoot = ($v['show_bootscreen'] ?? '1') === '1';
+    $set('SHOW_BOOTSCREEN', $keep('SHOW_BOOTSCREEN'), $showBoot);
+    if ($showBoot) {
+        $logo = $v['boot_logo_size'] ?? 'full';
+        $set('BOOT_MARLIN_LOGO_SMALL', $keep('BOOT_MARLIN_LOGO_SMALL'), $logo === 'small');
+        $set('BOOT_MARLIN_LOGO_ANIMATED', $keep('BOOT_MARLIN_LOGO_ANIMATED'), $logo === 'animated');
+    }
+    $set('CUSTOM_STATUS_SCREEN_IMAGE', $keep('CUSTOM_STATUS_SCREEN_IMAGE'), ($v['custom_status_image'] ?? '0') === '1');
+
     return $applied;
 }
 

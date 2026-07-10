@@ -195,24 +195,48 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Image too large (8 MB max)'], 422);
         }
 
-        $result = bootscreen_generate((string)$file['tmp_name']);
+        // Live-preview options (from multipart fields).
+        $target  = (($_POST['target'] ?? 'boot') === 'status') ? 'status' : 'boot';
+        $opts = [
+            'target'    => $target,
+            'threshold' => (int)($_POST['threshold'] ?? 128),
+            'invert'    => (string)($_POST['invert'] ?? '0') === '1',
+            'dither'    => (string)($_POST['dither'] ?? '1') === '1',
+        ];
+        // Preview-only requests don't write files or touch config.
+        $previewOnly = (string)($_POST['preview_only'] ?? '0') === '1';
+
+        $result = bootscreen_generate((string)$file['tmp_name'], $opts);
         if (is_string($result)) {
             json_out(['ok' => false, 'error' => $result], 422);
         }
 
-        // Write Marlin/_Bootscreen.h next to Configuration_adv.h.
-        $bsPath = dirname($advPath) . '/_Bootscreen.h';
-        if (@file_put_contents($bsPath, $result['header']) === false) {
-            json_out(['ok' => false, 'error' => 'Could not write _Bootscreen.h'], 500);
+        if ($previewOnly) {
+            json_out(['ok' => true, 'preview_b64' => $result['preview_b64'], 'target' => $target]);
         }
 
-        // Enable SHOW_CUSTOM_BOOTSCREEN in Configuration_adv.h.
         $adv = marlin_config_parse($advPath);
-        if ($adv !== null && marlin_config_set($adv, 'SHOW_CUSTOM_BOOTSCREEN', null, true)) {
-            marlin_config_write($adv, $advPath);
+        if ($target === 'status') {
+            // Write Marlin/_Statusscreen.h and enable CUSTOM_STATUS_SCREEN_IMAGE.
+            $ssPath = dirname($advPath) . '/_Statusscreen.h';
+            if (@file_put_contents($ssPath, $result['header']) === false) {
+                json_out(['ok' => false, 'error' => 'Could not write _Statusscreen.h'], 500);
+            }
+            if ($adv !== null && marlin_config_set($adv, 'CUSTOM_STATUS_SCREEN_IMAGE', null, true)) {
+                marlin_config_write($adv, $advPath);
+            }
+        } else {
+            // Write Marlin/_Bootscreen.h and enable SHOW_CUSTOM_BOOTSCREEN.
+            $bsPath = dirname($advPath) . '/_Bootscreen.h';
+            if (@file_put_contents($bsPath, $result['header']) === false) {
+                json_out(['ok' => false, 'error' => 'Could not write _Bootscreen.h'], 500);
+            }
+            if ($adv !== null && marlin_config_set($adv, 'SHOW_CUSTOM_BOOTSCREEN', null, true)) {
+                marlin_config_write($adv, $advPath);
+            }
         }
 
-        json_out(['ok' => true, 'preview_b64' => $result['preview_b64']]);
+        json_out(['ok' => true, 'preview_b64' => $result['preview_b64'], 'target' => $target]);
     }
 
     default:

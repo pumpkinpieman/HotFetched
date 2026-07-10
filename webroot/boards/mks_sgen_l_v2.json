@@ -1,14 +1,13 @@
 {
-  "id": "btt_manta_m5p",
-  "name": "BigTreeTech Manta M5P V1.0 (G0B1)",
-  "vendor": "BigTreeTech",
+  "id": "mks_sgen_l_v2",
+  "name": "MKS SGEN_L V2 (LPC1769)",
+  "vendor": "Makerbase",
   "mcu_variants": [
     {
-      "id": "STM32G0B1RE",
-      "label": "STM32G0B1RET6 (64 MHz)",
-      "marlin_env": "STM32G0B1RE_manta_btt",
-      "klipper_mcu": "stm32g0b1xx",
-      "klipper_mach": "CONFIG_MACH_STM32G0B1"
+      "id": "LPC1769",
+      "label": "LPC1769 (120 MHz)",
+      "marlin_env": "LPC1769",
+      "klipper_mcu": "lpc1769"
     }
   ],
   "firmware_support": {
@@ -16,7 +15,7 @@
     "klipper": true
   },
   "marlin": {
-    "motherboard": "BOARD_BTT_MANTA_M5P_V1_0",
+    "motherboard": "BOARD_MKS_SGEN_L_V2",
     "serial_ports": [
       1,
       -1
@@ -25,7 +24,8 @@
       "X",
       "Y",
       "Z",
-      "E0"
+      "E0",
+      "E1"
     ],
     "valid_drivers": [
       "TMC2209",
@@ -36,7 +36,7 @@
       "DRV8825"
     ],
     "onboard_uart_drivers": true,
-    "max_extruders": 1,
+    "max_extruders": 2,
     "screens": [
       {
         "id": "none",
@@ -128,28 +128,27 @@
     ]
   },
   "limits": {
-    "max_bed_x": 350,
-    "max_bed_y": 350,
-    "max_z": 400,
+    "max_bed_x": 400,
+    "max_bed_y": 400,
+    "max_z": 450,
     "max_hotend_temp": 350,
     "max_bed_temp": 130,
     "max_feedrate_xy": 500,
     "max_feedrate_z": 20
   },
   "klipper": {
-    "reference_config": "generic-bigtreetech-manta-m5p.cfg",
+    "reference_config": "generic-mks-sgenl.cfg",
     "config_seed": [
-      "CONFIG_MACH_STM32=y",
-      "{MACH}=y",
-      "CONFIG_STM32_FLASH_START_2000=y",
+      "CONFIG_MACH_LPC1769=y",
+      "CONFIG_LPC_USB=y",
       "CONFIG_USBSERIAL=y"
     ],
     "kconfig": {
-      "FLASH_APPLICATION_ADDRESS": "0x8002000"
+      "FLASH_APPLICATION_ADDRESS": "0x4000"
     },
-    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (8KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32G0B1",
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (16KB bootloader).",
+    "mach": "CONFIG_MACH_LPC1769",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.1.2"
+  "min_marlin": "2.0.8"
 }

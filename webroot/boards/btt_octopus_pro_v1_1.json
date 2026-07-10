@@ -149,6 +149,8 @@
       "FLASH_APPLICATION_ADDRESS": "0x8020000"
     },
     "flash_note": "Copy out/klipper.bin to SD as firmware.bin (128KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32H723"
-  }
+    "mach": "CONFIG_MACH_STM32H723",
+    "artifact": "klipper.bin"
+  },
+  "min_marlin": "2.1.2"
 }

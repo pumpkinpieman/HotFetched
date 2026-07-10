@@ -124,21 +124,33 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
                 <div id="cfgGroups"></div>
 
                 <div id="bsBlock" hidden>
-                    <h3 class="cfg-group">Boot Image (128&times;64 monochrome LCD)</h3>
-                    <p class="empty">Full-color images are converted to a 1-bit dithered (pixelated) bitmap &mdash; that's what the LCD hardware can display.</p>
+                    <h3 class="cfg-group">Boot &amp; Status Images (128&times;64 monochrome LCD)</h3>
+                    <p class="empty">Full-color images are converted to a 1-bit bitmap &mdash; that's what the LCD hardware can display. Tune the conversion below and preview live before installing.</p>
                     <div class="src-grid">
                         <div class="src-card">
-                            <label>Boot image (PNG/JPEG, max 8 MB)
+                            <label>Image target
+                                <select id="bsTarget">
+                                    <option value="boot">Boot screen (shown at power-on)</option>
+                                    <option value="status">Status screen (shown while printing)</option>
+                                </select>
+                            </label>
+                            <label>Image file (PNG/JPEG, max 8 MB)
                                 <input type="file" id="bsFile" accept="image/png,image/jpeg">
                             </label>
+                            <label class="bs-range">Threshold: <span id="bsThreshVal">128</span>
+                                <input type="range" id="bsThreshold" min="0" max="255" value="128">
+                            </label>
+                            <label class="cfg-bool"><input type="checkbox" id="bsDither" checked> Dither (smooth gradients; off = hard edges)</label>
+                            <label class="cfg-bool"><input type="checkbox" id="bsInvert"> Invert (swap light/dark)</label>
                             <div class="actions">
-                                <button type="button" class="btn" id="bsUploadBtn">Convert &amp; Install</button>
+                                <button type="button" class="btn" id="bsPreviewBtn">Preview</button>
+                                <button type="button" class="btn primary" id="bsUploadBtn">Convert &amp; Install</button>
                                 <span class="msg" id="bsMsg"></span>
                             </div>
                         </div>
                         <div class="src-card" id="bsPreviewCard" hidden>
-                            <h3>Dithered preview (as the LCD will show it)</h3>
-                            <img id="bsPreview" alt="Bootscreen preview" class="bs-preview">
+                            <h3>Preview (as the LCD will show it)</h3>
+                            <img id="bsPreview" alt="Image preview" class="bs-preview">
                         </div>
                     </div>
                 </div>
@@ -1107,28 +1119,44 @@ if (cfgForm) {
         else el('cfgLoading').textContent = res.error || 'Failed to load configuration';
     })();
 
-    el('bsUploadBtn')?.addEventListener('click', async () => {
+    const bsThresh = el('bsThreshold');
+    bsThresh?.addEventListener('input', () => { el('bsThreshVal').textContent = bsThresh.value; });
+
+    async function bsSend(previewOnly) {
         const f = el('bsFile').files[0];
         if (!f) { el('bsMsg').textContent = 'Choose an image first'; return; }
-        el('bsMsg').textContent = 'Converting\u2026';
+        el('bsMsg').textContent = previewOnly ? 'Rendering preview\u2026' : 'Converting\u2026';
         const fd = new FormData();
         fd.append('action', 'bootscreen');
         fd.append('csrf', CSRF);
         fd.append('id', String(PROJECT_ID));
         fd.append('image', f);
+        fd.append('target', el('bsTarget').value);
+        fd.append('threshold', bsThresh.value);
+        fd.append('dither', el('bsDither').checked ? '1' : '0');
+        fd.append('invert', el('bsInvert').checked ? '1' : '0');
+        fd.append('preview_only', previewOnly ? '1' : '0');
         let res;
         try {
             const r = await fetch('api/config.php', { method: 'POST', body: fd });
             res = await r.json();
         } catch { res = { ok: false, error: 'Upload failed' }; }
         if (res.ok) {
-            el('bsMsg').textContent = 'Installed _Bootscreen.h + enabled SHOW_CUSTOM_BOOTSCREEN \u2713';
             el('bsPreview').src = 'data:image/png;base64,' + res.preview_b64;
             el('bsPreviewCard').hidden = false;
+            if (previewOnly) {
+                el('bsMsg').textContent = 'Preview only \u2014 not yet installed';
+            } else if (res.target === 'status') {
+                el('bsMsg').textContent = 'Installed _Statusscreen.h + enabled CUSTOM_STATUS_SCREEN_IMAGE \u2713';
+            } else {
+                el('bsMsg').textContent = 'Installed _Bootscreen.h + enabled SHOW_CUSTOM_BOOTSCREEN \u2713';
+            }
         } else {
             el('bsMsg').textContent = res.error || 'Conversion failed';
         }
-    });
+    }
+    el('bsPreviewBtn')?.addEventListener('click', () => bsSend(true));
+    el('bsUploadBtn')?.addEventListener('click', () => bsSend(false));
 
     cfgForm.addEventListener('submit', async (e) => {
         e.preventDefault();

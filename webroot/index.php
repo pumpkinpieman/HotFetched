@@ -120,7 +120,11 @@ function fillMcu() {
         o.textContent = v.label;
         mcuSel.appendChild(o);
     }
-    const note = b.note ? b.note : '';
+    let note = b.note ? b.note : '';
+    if (b.min_marlin) {
+        const vm = 'Needs Marlin ' + b.min_marlin + '+ (or bugfix-2.1.x). Import a matching source.';
+        note = note ? (note + ' ' + vm) : vm;
+    }
     let noteEl = document.getElementById('boardNote');
     if (!noteEl) {
         noteEl = document.createElement('p');

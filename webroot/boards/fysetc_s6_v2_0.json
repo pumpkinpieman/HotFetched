@@ -1,14 +1,13 @@
 {
-  "id": "btt_manta_m5p",
-  "name": "BigTreeTech Manta M5P V1.0 (G0B1)",
-  "vendor": "BigTreeTech",
+  "id": "fysetc_s6_v2_0",
+  "name": "FYSETC S6 V2.0 (F446)",
+  "vendor": "FYSETC",
   "mcu_variants": [
     {
-      "id": "STM32G0B1RE",
-      "label": "STM32G0B1RET6 (64 MHz)",
-      "marlin_env": "STM32G0B1RE_manta_btt",
-      "klipper_mcu": "stm32g0b1xx",
-      "klipper_mach": "CONFIG_MACH_STM32G0B1"
+      "id": "STM32F446VE",
+      "label": "STM32F446VET6 (180 MHz)",
+      "marlin_env": "STM32F446VE_fysetc",
+      "klipper_mcu": "stm32f446xx"
     }
   ],
   "firmware_support": {
@@ -16,7 +15,7 @@
     "klipper": true
   },
   "marlin": {
-    "motherboard": "BOARD_BTT_MANTA_M5P_V1_0",
+    "motherboard": "BOARD_FYSETC_S6_V2_0",
     "serial_ports": [
       1,
       -1
@@ -25,7 +24,8 @@
       "X",
       "Y",
       "Z",
-      "E0"
+      "E0",
+      "E1"
     ],
     "valid_drivers": [
       "TMC2209",
@@ -36,7 +36,7 @@
       "DRV8825"
     ],
     "onboard_uart_drivers": true,
-    "max_extruders": 1,
+    "max_extruders": 2,
     "screens": [
       {
         "id": "none",
@@ -128,28 +128,27 @@
     ]
   },
   "limits": {
-    "max_bed_x": 350,
-    "max_bed_y": 350,
-    "max_z": 400,
+    "max_bed_x": 400,
+    "max_bed_y": 400,
+    "max_z": 450,
     "max_hotend_temp": 350,
     "max_bed_temp": 130,
     "max_feedrate_xy": 500,
     "max_feedrate_z": 20
   },
   "klipper": {
-    "reference_config": "generic-bigtreetech-manta-m5p.cfg",
+    "reference_config": "generic-fysetc-s6-v2.cfg",
     "config_seed": [
-      "CONFIG_MACH_STM32=y",
-      "{MACH}=y",
-      "CONFIG_STM32_FLASH_START_2000=y",
+      "CONFIG_MACH_STM32F446=y",
+      "CONFIG_STM32_FLASH_START_8000=y",
       "CONFIG_USBSERIAL=y"
     ],
     "kconfig": {
-      "FLASH_APPLICATION_ADDRESS": "0x8002000"
+      "FLASH_APPLICATION_ADDRESS": "0x8008000"
     },
-    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (8KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32G0B1",
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (32KiB bootloader).",
+    "mach": "CONFIG_MACH_STM32F446",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.1.2"
+  "min_marlin": "2.1"
 }

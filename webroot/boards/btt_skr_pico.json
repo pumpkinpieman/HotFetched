@@ -12,7 +12,7 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": false
+    "klipper": true
   },
   "marlin": {
     "motherboard": "BOARD_BTT_SKR_PICO",
@@ -135,5 +135,19 @@
     "max_feedrate_xy": 300,
     "max_feedrate_z": 20
   },
-  "note": "RP2040 board. Marlin builds via PlatformIO. Klipper for RP2040 uses a separate toolchain not yet bundled - Klipper build support is coming; use Marlin for now."
+  "klipper": {
+    "reference_config": "generic-bigtreetech-skr-pico-v1.0.cfg",
+    "config_seed": [
+      "CONFIG_MACH_RP2040=y",
+      "CONFIG_RP2040_FLASH_START_2000=n",
+      "CONFIG_USBSERIAL=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x10000100"
+    },
+    "flash_note": "Hold BOOTSEL, plug in USB (mounts as RPI-RP2), copy out/klipper.uf2 onto it. The Pico reboots into Klipper.",
+    "mach": "CONFIG_MACH_RP2040",
+    "artifact": "klipper.uf2"
+  },
+  "min_marlin": "2.1"
 }

@@ -146,22 +146,25 @@ if ($project['firmware'] === 'klipper') {
          . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
     $exit = (int)trim((string)shell_exec($cmd));
 
-    $bin = $tree . '/out/klipper.bin';
+    // Artifact name varies by MCU family: STM32/LPC -> klipper.bin,
+    // RP2040 -> klipper.uf2, AVR -> klipper.elf.
+    $artifact = (string)($board['klipper']['artifact'] ?? 'klipper.bin');
+    $bin = $tree . '/out/' . $artifact;
     $built = $exit === 0 && is_file($bin);
     $detail = '';
     if (!$built) {
         $tail = (string)@shell_exec('grep -iE "error" ' . escapeshellarg($logPath) . ' | tail -6');
         $detail = $exit === 124 ? 'Build timed out (15 min)' : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit);
     }
-    $confidence += gate('s3_make', 'Klipper MCU firmware compiles (klipper.bin)', 40, $built, $detail);
+    $confidence += gate('s3_make', 'Klipper MCU firmware compiles (' . $artifact . ')', 40, $built, $detail);
 
     if ($built) {
-        @copy($bin, $buildDir . '/klipper.bin');
-        // The download endpoint serves firmware.bin by name — provide both.
-        @copy($bin, $buildDir . '/firmware.bin');
+        @copy($bin, $buildDir . '/' . $artifact);
+        // The download endpoint serves firmware by a stable name; keep the real
+        // extension so users flash the right file (.uf2/.elf are not .bin).
         db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')
-            ->execute([$buildDir . '/firmware.bin', $buildId]);
-        blog('klipper.bin: ' . number_format((float)filesize($bin)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
+            ->execute([$buildDir . '/' . $artifact, $buildId]);
+        blog($artifact . ': ' . number_format((float)filesize($bin)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
 
         $printerCfg = klipper_generate_printer_cfg((string)$refTxt, $vals);
         @file_put_contents($buildDir . '/printer.cfg', $printerCfg);
@@ -281,7 +284,9 @@ if (is_file($boardsH)) {
     $bh = (string)@file_get_contents($boardsH);
     $treeHasBoard = preg_match('/^\s*#define\s+' . preg_quote($expectedMb, '/') . '\s+\d+/m', $bh) === 1;
 }
-$treeDetail = $treeHasBoard ? '' : $expectedMb . ' is not defined in this Marlin source. The imported firmware version predates this board — import a newer Marlin (2.1.2+ / bugfix-2.1.x) via Replace source, or pick a board this tree supports.';
+$minMarlin = (string)($board['min_marlin'] ?? '');
+$verHint = $minMarlin !== '' ? "Marlin {$minMarlin}+ (or bugfix-2.1.x)" : 'a newer Marlin (2.1.2+ / bugfix-2.1.x)';
+$treeDetail = $treeHasBoard ? '' : $expectedMb . " is not defined in this Marlin source. This board needs {$verHint}. Import a matching source via Replace source, or pick a board this tree supports.";
 $confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin version', 5, $treeHasBoard, $treeDetail);
 
 if ($confidence < 60) {
@@ -372,6 +377,10 @@ if ($built) {
         $bs = dirname((string)$advPath) . '/_Bootscreen.h';
         if (is_file($bs)) {
             $zip->addFile($bs, 'Marlin/_Bootscreen.h');
+        }
+        $ss = dirname((string)$advPath) . '/_Statusscreen.h';
+        if (is_file($ss)) {
+            $zip->addFile($ss, 'Marlin/_Statusscreen.h');
         }
         $zip->close();
     }

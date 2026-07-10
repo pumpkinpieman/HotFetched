@@ -11,7 +11,7 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": false
+    "klipper": true
   },
   "marlin": {
     "motherboard": "BOARD_BTT_SKR_V1_4",
@@ -135,5 +135,19 @@
     "max_feedrate_xy": 500,
     "max_feedrate_z": 20
   },
-  "note": "LPC1768 board. Marlin builds via PlatformIO. Klipper on LPC176x needs a separate toolchain not yet bundled."
+  "klipper": {
+    "reference_config": "generic-bigtreetech-skr-v1.4.cfg",
+    "config_seed": [
+      "CONFIG_MACH_LPC1768=y",
+      "CONFIG_LPC_USB=y",
+      "CONFIG_USBSERIAL=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x4000"
+    },
+    "flash_note": "Copy out/klipper.bin to SD as firmware.bin (SKR 1.4 has a 16KB bootloader).",
+    "mach": "CONFIG_MACH_LPC1768",
+    "artifact": "klipper.bin"
+  },
+  "min_marlin": "2.0"
 }

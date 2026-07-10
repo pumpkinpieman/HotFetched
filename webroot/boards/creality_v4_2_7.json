@@ -148,7 +148,9 @@
       "FLASH_APPLICATION_ADDRESS": "0x8007000"
     },
     "flash_note": "Copy out/klipper.bin to SD as firmware.bin (28KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32F103"
+    "mach": "CONFIG_MACH_STM32F103",
+    "artifact": "klipper.bin"
   },
-  "note": "Very common Ender-3 board. Many V4.2.7 units ship with GD32 silicon, not STM32 - verify before flashing; GD32 needs a separate Klipper build path not yet automated here."
+  "note": "Very common Ender-3 board. Many V4.2.7 units ship with GD32 silicon, not STM32 - verify before flashing; GD32 needs a separate Klipper build path not yet automated here.",
+  "min_marlin": "2.0.8"
 }

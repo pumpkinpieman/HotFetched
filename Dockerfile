@@ -1,7 +1,8 @@
 FROM php:8.3-apache
 
 # --- System toolchain -------------------------------------------------------
-# gcc-arm-none-eabi + libnewlib: Klipper MCU firmware (STM32H7)
+# gcc-arm-none-eabi + libnewlib: Klipper MCU firmware (STM32, RP2040, LPC176x — all ARM)
+# gcc-avr + avr-libc: Klipper MCU firmware for 8-bit AVR (RAMPS/ATmega2560)
 # python3/venv/pip: PlatformIO (Marlin) + klippy config validation
 # git/unzip/zip: source acquisition and artifact packaging
 # ccache: iterative Marlin rebuild speed
@@ -9,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git unzip zip ccache libzip-dev libpng-dev libjpeg62-turbo-dev \
         python3 python3-venv python3-pip \
         gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
+        gcc-avr avr-libc \
         libusb-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 

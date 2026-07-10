@@ -29,50 +29,31 @@ with live preview.
 
 ## Supported boards
 
-| Board | MCU | Marlin | Klipper |
-|---|---|---|---|
-| BigTreeTech Manta M5P V1.0 (G0B1) | STM32G0B1RE | yes | yes |
-| BigTreeTech Manta M8P V2.0 | STM32H723ZE | yes | yes |
-| BigTreeTech Octopus Pro V1.1 (H723) | STM32H723ZE | yes | yes |
-| BigTreeTech Octopus V1.1 | STM32F446ZE | yes | yes |
-| BigTreeTech SKR 1.4 (LPC1768) | LPC1768 | yes | planned |
-| BigTreeTech SKR 1.4 Turbo (LPC1769) | LPC1769 | yes | planned |
-| BigTreeTech SKR 2.0 (F407) | STM32F407VG | yes | yes |
-| BigTreeTech SKR 3 | STM32H743VI, STM32H723VG | yes | yes |
-| BigTreeTech SKR 3 EZ | STM32H743VI, STM32H723VG | yes | yes |
-| BigTreeTech SKR Mini E3 V2.0 (F103) | STM32F103RC | yes | yes |
-| BigTreeTech SKR Mini E3 V3.0 | STM32G0B1RE | yes | yes |
-| BigTreeTech SKR Pico V1.0 (RP2040) | RP2040 | yes | planned |
-| Creality V4.2.2 (F103) | STM32F103RE | yes | yes |
-| Creality V4.2.7 (F103) | STM32F103RE | yes | yes |
-| FYSETC Spider (F446) | STM32F446VE | yes | yes |
-| MKS Robin Nano V3 (F407) | STM32F407VG | yes | yes |
-| RAMPS 1.4 (Arduino Mega / ATmega2560) | ATmega2560 | yes | planned |
-
-Boards are JSON under `webroot/boards/` — adding one is data, not code. 17 boards ship in-box across BigTreeTech, Creality, FYSETC, Makerbase, and generic RAMPS.
-
-## Run
-
-```bash
-docker run -d --name HotFetched \
-  -p 16356:80 \
-  -v /path/to/appdata/hotfetched/private:/var/www/html/private \
-  -v /path/to/appdata/hotfetched/platformio:/opt/platformio \
-  --restart unless-stopped \
-  ghcr.io/pumpkinpieman/hotfetched:latest
-```
-
-**Unraid:** template at `deploy/hotfetched.xml`. Keep the private path on
-cache/pool storage (SQLite and FUSE user shares do not mix). The platformio
-volume caches the ~1-2 GB STM32 toolchain across updates.
-
-## Build gates
-
-| Stage | Points | What it proves |
-|---|---|---|
-| Static validation | 40 | fields present, within board limits, valid selections, no conflicts |
-| Config integrity | 20 | files parse, MOTHERBOARD matches the board |
-| Real compile | 40 | PlatformIO / make exits 0 and the binary exists |
+| Board | MCU | Marlin | Klipper | Min Marlin |
+|---|---|---|---|---|
+| BigTreeTech Kraken V1.0 (H723) | STM32H723ZG | yes | pending cfg | 2.1.3 |
+| BigTreeTech Manta M5P V1.0 (G0B1) | STM32G0B1RE | yes | yes | 2.1.2 |
+| BigTreeTech Manta M8P V2.0 | STM32H723ZE | yes | yes | 2.1.2 |
+| BigTreeTech Octopus Pro V1.1 (H723) | STM32H723ZE | yes | yes | 2.1.2 |
+| BigTreeTech Octopus V1.1 | STM32F446ZE | yes | yes | 2.0.9.4 |
+| BigTreeTech SKR 1.4 (LPC1768) | LPC1768 | yes | yes | 2.0 |
+| BigTreeTech SKR 1.4 Turbo (LPC1769) | LPC1769 | yes | yes | 2.0 |
+| BigTreeTech SKR 2.0 (F407) | STM32F407VG | yes | yes | 2.0.9.3 |
+| BigTreeTech SKR 3 | STM32H743VI, STM32H723VG | yes | yes | 2.1.2 |
+| BigTreeTech SKR 3 EZ | STM32H743VI, STM32H723VG | yes | yes | 2.1.2 |
+| BigTreeTech SKR Mini E3 V2.0 (F103) | STM32F103RC | yes | yes | 2.0.7 |
+| BigTreeTech SKR Mini E3 V3.0 | STM32G0B1RE | yes | yes | 2.1 |
+| BigTreeTech SKR Pico V1.0 (RP2040) | RP2040 | yes | yes | 2.1 |
+| Creality V4.2.2 (F103) | STM32F103RE | yes | yes | 2.0.8 |
+| Creality V4.2.7 (F103) | STM32F103RE | yes | yes | 2.0.8 |
+| FYSETC S6 V2.0 (F446) | STM32F446VE | yes | yes | 2.1 |
+| FYSETC Spider (F446) | STM32F446VE | yes | yes | 2.0.9.2 |
+| RAMPS 1.4 (Arduino Mega / ATmega2560) | ATmega2560 | yes | yes | 1.1.9 |
+| MKS Monster8 V2 (F407) | STM32F407VE | yes | yes | 2.1 |
+| MKS Robin Nano V3 (F407) | STM32F407VG | yes | yes | 2.0.9.3 |
+| MKS Robin Nano V3.1 (F407) | STM32F407VE | yes | yes | 2.1 |
+| MKS SGEN_L V2 (LPC1769) | LPC1769 | yes | yes | 2.0.8 |
+| Einsy Rambo (Prusa MK3 class, ATmega2560) | ATmega2560 | yes | yes | 2.0 |
 
 Anything under 100 shows exactly which gate failed and why.
 

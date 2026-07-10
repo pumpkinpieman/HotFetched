@@ -148,6 +148,8 @@
       "FLASH_APPLICATION_ADDRESS": "0x8008000"
     },
     "flash_note": "Copy out/klipper.bin to SD as firmware.bin (32KiB bootloader).",
-    "mach": "CONFIG_MACH_STM32F407"
-  }
+    "mach": "CONFIG_MACH_STM32F407",
+    "artifact": "klipper.bin"
+  },
+  "min_marlin": "2.0.9.3"
 }

@@ -20,26 +20,34 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         exit('Build not found');
     }
     $dir = realpath(build_dir((int)$b['pid'], (int)$b['id']));
-    $map = [
-        'firmware' => ['firmware.bin', 'application/octet-stream'],
-        'config'   => ['config-bundle.zip', 'application/zip'],
-        'log'      => ['build.log', 'text/plain'],
-    ];
-    if (!isset($map[$type]) || $dir === false) {
+    if ($dir === false) {
         http_response_code(404);
         exit('Not found');
     }
-    $file = realpath($dir . '/' . $map[$type][0]);
-    if ($file === false || !str_starts_with($file, $dir . '/') && $file !== $dir . '/' . $map[$type][0]) {
-        // realpath containment: file must live inside the build dir
+    // Firmware artifact keeps its real name (.bin/.uf2/.elf); resolve from the
+    // stored artifact_path. Config/log are fixed names.
+    if ($type === 'firmware') {
+        $artifactName = is_string($b['artifact_path']) ? basename($b['artifact_path']) : 'firmware.bin';
+        $target = [$artifactName, 'application/octet-stream'];
+    } else {
+        $map = [
+            'config' => ['config-bundle.zip', 'application/zip'],
+            'log'    => ['build.log', 'text/plain'],
+        ];
+        if (!isset($map[$type])) {
+            http_response_code(404);
+            exit('Not found');
+        }
+        $target = $map[$type];
     }
+    $file = realpath($dir . '/' . $target[0]);
     if ($file === false || !str_starts_with($file, $dir)) {
         http_response_code(404);
         exit('Artifact not available');
     }
     $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$b['pname']);
-    $dlName = $safeName . '-build' . $b['id'] . '-' . $map[$type][0];
-    header('Content-Type: ' . $map[$type][1]);
+    $dlName = $safeName . '-build' . $b['id'] . '-' . $target[0];
+    header('Content-Type: ' . $target[1]);
     header('Content-Disposition: attachment; filename="' . $dlName . '"');
     header('Content-Length: ' . (string)filesize($file));
     readfile($file);
