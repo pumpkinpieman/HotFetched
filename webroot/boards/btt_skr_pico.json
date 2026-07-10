@@ -138,6 +138,8 @@
   "klipper": {
     "reference_config": "generic-bigtreetech-skr-pico-v1.0.cfg",
     "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_RPXXXX=y",
       "CONFIG_MACH_RP2040=y",
       "CONFIG_RP2040_FLASH_START_2000=n",
       "CONFIG_USBSERIAL=y"

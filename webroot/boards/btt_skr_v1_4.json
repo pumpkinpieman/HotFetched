@@ -138,6 +138,8 @@
   "klipper": {
     "reference_config": "generic-bigtreetech-skr-v1.4.cfg",
     "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_LPC176X=y",
       "CONFIG_MACH_LPC1768=y",
       "CONFIG_LPC_USB=y",
       "CONFIG_USBSERIAL=y"

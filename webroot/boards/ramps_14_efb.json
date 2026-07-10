@@ -137,6 +137,8 @@
   "klipper": {
     "reference_config": "generic-ramps.cfg",
     "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_AVR=y",
       "CONFIG_MACH_atmega2560=y",
       "CONFIG_AVR_FREQ_16000000=y",
       "CONFIG_AVR_SERIAL_UART0=y"

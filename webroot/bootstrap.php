@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.3.1';
+const HF_VERSION = '2.3.2';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -465,12 +465,15 @@ function detect_firmware_tree(string $sourceDir, string $firmware, ?string &$err
             if (is_file($mk) && is_dir($src) && is_dir($kpy)) {
                 $rel = substr($root, strlen($sourceDir));
                 $rel = ltrim($rel, '/');
-                $refCfg = ($rel === '' ? '' : $rel . '/') . 'config/generic-bigtreetech-skr-3.cfg';
+                // The specific reference_config is board-defined and resolved at
+                // build/config time. Detection only records that this is a valid
+                // Klipper tree and where its config/ directory lives.
+                $configDir = ($rel === '' ? '' : $rel . '/') . 'config';
                 return [
                     'root'  => $rel,
                     'files' => [
-                        'makefile'         => ($rel === '' ? '' : $rel . '/') . 'Makefile',
-                        'reference_config' => is_file($sourceDir . '/' . $refCfg) ? $refCfg : null,
+                        'makefile'   => ($rel === '' ? '' : $rel . '/') . 'Makefile',
+                        'config_dir' => is_dir($sourceDir . '/' . $configDir) ? $configDir : null,
                     ],
                 ];
             }

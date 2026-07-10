@@ -139,6 +139,8 @@
   "klipper": {
     "reference_config": "generic-fysetc-s6-v2.cfg",
     "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_STM32=y",
       "CONFIG_MACH_STM32F446=y",
       "CONFIG_STM32_FLASH_START_8000=y",
       "CONFIG_USBSERIAL=y"

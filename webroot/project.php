@@ -103,6 +103,9 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
                     <?php foreach (($detect['files'] ?? []) as $k => $v): if ($v === null) continue; ?>
                     <div><span><?= h((string)$k) ?></span><b><code><?= h((string)$v) ?></code></b></div>
                     <?php endforeach; ?>
+                    <?php if ($project['firmware'] === 'klipper' && $board !== null && isset($board['klipper']['reference_config'])): ?>
+                    <div><span>board reference cfg</span><b><code><?= h((string)$board['klipper']['reference_config']) ?></code></b></div>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
             <div class="actions">
