@@ -361,7 +361,13 @@ function cfgApplyVisibility() {
     const values = cfgCollect();
     for (const f of CFG_FIELDS) {
         const wrap = document.getElementById('cfw_' + f.key);
-        if (wrap) wrap.hidden = !cfgVisible(f, values);
+        const input = document.getElementById('cf_' + f.key);
+        if (!wrap) continue;
+        const hide = !cfgVisible(f, values);
+        wrap.hidden = hide;
+        // Hidden controls must be disabled too: a hidden+required+empty input
+        // blocks HTML5 form submission ("not focusable") and shouldn't validate.
+        if (input) input.disabled = hide;
     }
 }
 
