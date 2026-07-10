@@ -302,6 +302,11 @@ function project_fetch_log(int $id): string
     return project_dir($id) . '/fetch.log';
 }
 
+function build_dir(int $projectId, int $buildId): string
+{
+    return project_dir($projectId) . '/builds/' . $buildId;
+}
+
 /**
  * Detached worker launch (FarFetched pattern) — never blocks the request.
  */
@@ -1053,4 +1058,98 @@ function soundlib_index(): array
     }
     $idx = json_decode((string)file_get_contents($f), true);
     return is_array($idx) ? $idx : [];
+}
+
+/* ------------------------------------------------ Shared validation */
+
+/**
+ * Validate submitted values against field definitions. All fields are
+ * required unless their `requires` condition is unmet. Returns
+ * [values, errors] with values normalized to strings.
+ */
+function hf_validate_fields(array $fields, array $input): array
+{
+    $values = [];
+    $errors = [];
+
+    foreach ($fields as $f) {
+        $key = $f['key'];
+
+        // Conditional fields: skip when the condition doesn't hold.
+        if (isset($f['requires'])) {
+            $met = true;
+            foreach ($f['requires'] as $rk => $rv) {
+                $have = (string)($input[$rk] ?? '');
+                $okReq = is_array($rv) ? in_array($have, array_map('strval', $rv), true) : $have === (string)$rv;
+                if (!$okReq) {
+                    $met = false;
+                    break;
+                }
+            }
+            if (!$met) {
+                $values[$key] = $f['type'] === 'bool' ? '0' : '';
+                continue;
+            }
+        }
+
+        $raw = $input[$key] ?? null;
+
+        switch ($f['type']) {
+            case 'text':
+                $raw = is_string($raw) ? trim($raw) : '';
+                if ($raw === '') {
+                    $errors[$key] = 'Required';
+                } elseif (mb_strlen($raw) > ($f['maxlen'] ?? 64)) {
+                    $errors[$key] = 'Too long (max ' . ($f['maxlen'] ?? 64) . ')';
+                } elseif (!preg_match('/^[\x20-\x7E]+$/', $raw)) {
+                    $errors[$key] = 'Printable ASCII only';
+                }
+                $values[$key] = str_replace(['"', '\\'], '', $raw);
+                break;
+
+            case 'int':
+                $n = filter_var($raw, FILTER_VALIDATE_INT);
+                if ($n === false) {
+                    $errors[$key] = 'Required (whole number)';
+                    $values[$key] = '';
+                    break;
+                }
+                if (isset($f['min']) && $n < $f['min']) {
+                    $errors[$key] = 'Minimum ' . $f['min'];
+                } elseif (isset($f['max']) && $n > $f['max']) {
+                    $errors[$key] = 'Maximum ' . $f['max'] . ' for this board';
+                }
+                $values[$key] = (string)$n;
+                break;
+
+            case 'float':
+                $n = filter_var($raw, FILTER_VALIDATE_FLOAT);
+                if ($n === false) {
+                    $errors[$key] = 'Required (number)';
+                    $values[$key] = '';
+                    break;
+                }
+                if (isset($f['min']) && $n < $f['min']) {
+                    $errors[$key] = 'Minimum ' . $f['min'];
+                } elseif (isset($f['max']) && $n > $f['max']) {
+                    $errors[$key] = 'Maximum ' . $f['max'];
+                }
+                $values[$key] = rtrim(rtrim(sprintf('%.2f', $n), '0'), '.');
+                break;
+
+            case 'select':
+                $raw = is_string($raw) ? $raw : '';
+                if (!in_array($raw, $f['options'], true)) {
+                    $errors[$key] = 'Choose a valid option';
+                }
+                $values[$key] = $raw;
+                break;
+
+            case 'bool':
+                $values[$key] = ($raw === '1' || $raw === 1 || $raw === true) ? '1' : '0';
+                break;
+        }
+    }
+
+    return [$values, $errors];
 }

@@ -157,31 +157,39 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
         <?php endif; ?>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="buildPanel">
         <h2>Builds</h2>
-        <?php
-        $stmt = db()->prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 25');
-        $stmt->execute([$id]);
-        $builds = $stmt->fetchAll();
-        ?>
-        <?php if (!$builds): ?>
-            <p class="empty">No builds yet.</p>
+        <?php if ($fwKey !== 'marlin'): ?>
+            <p class="empty">Klipper builds ship in a later phase.</p>
+        <?php elseif ($project['source_state'] !== 'ready'): ?>
+            <p class="empty">Import a firmware source and submit a configuration to build.</p>
         <?php else: ?>
-        <table class="tbl">
-            <thead><tr><th>#</th><th>Status</th><th>Confidence</th><th>Started</th><th>Finished</th></tr></thead>
-            <tbody>
-            <?php foreach ($builds as $b): ?>
-                <tr>
-                    <td><?= (int)$b['id'] ?></td>
-                    <td><span class="tag st-<?= h($b['status']) ?>"><?= h($b['status']) ?></span></td>
-                    <td><?= $b['confidence'] !== null ? (int)$b['confidence'] . '%' : '—' ?></td>
-                    <td><?= h($b['started_at'] ?? '—') ?></td>
-                    <td><?= h($b['finished_at'] ?? '—') ?></td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
+            <div class="actions" style="margin-bottom:12px">
+                <button class="btn primary" id="buildStartBtn" type="button">Start Build</button>
+                <span class="msg" id="buildMsg">100% confidence = the firmware actually compiled.</span>
+            </div>
+            <div id="buildCard" hidden>
+                <div class="kv" style="margin-bottom:10px">
+                    <div><span>Status</span><b><span class="tag" id="bStatus">—</span></b></div>
+                    <div><span>Confidence</span><b id="bConf">—</b></div>
+                </div>
+                <div class="prog" style="max-width:none">
+                    <div class="prog-bar"><div class="prog-fill" id="bFill" style="width:0%"></div></div>
+                </div>
+                <div id="bGates" class="gates"></div>
+                <pre id="bLog" class="build-log" hidden></pre>
+                <div class="actions" id="bDownloads" hidden>
+                    <a class="btn primary" id="dlFw" href="#">Download firmware.bin</a>
+                    <a class="btn" id="dlCfg" href="#">Export config bundle (.zip)</a>
+                    <a class="btn" id="dlLog" href="#">Build log</a>
+                </div>
+            </div>
         <?php endif; ?>
+
+        <table class="tbl" style="margin-top:14px" id="buildHistory" hidden>
+            <thead><tr><th>#</th><th>Status</th><th>Confidence</th><th>Started</th><th>Finished</th><th></th></tr></thead>
+            <tbody id="buildHistoryBody"></tbody>
+        </table>
     </section>
 </main>
 
@@ -512,18 +520,17 @@ function midiToSeq(buf) {
 
     let usPerQN = 500000;
     const held = new Set();
-    const seq = [];
+    const segments = []; // {notes:[], durMs}
     let lastTick = 0;
     let lastUs = 0;
     const tickToUs = (dt) => dt * usPerQN / division;
-    let curNote = null;
+    let curNotes = [];
     let curStartUs = 0;
 
-    const emit = (untilUs) => {
+    const sameSet = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    const close = (untilUs) => {
         const durMs = Math.round((untilUs - curStartUs) / 1000);
-        if (durMs < 15) return;
-        if (curNote === null) seq.push([0, Math.min(durMs, 3000)]);
-        else seq.push([Math.round(440 * Math.pow(2, (curNote - 69) / 12)), Math.min(durMs, 3000)]);
+        if (durMs >= 15) segments.push({ notes: curNotes, durMs: Math.min(durMs, 4000) });
     };
 
     for (const ev of events) {
@@ -533,15 +540,38 @@ function midiToSeq(buf) {
         if (ev.type === 'tempo') { usPerQN = ev.usPerQN; continue; }
         if (ev.type === 'on') held.add(ev.note);
         else held.delete(ev.note);
-        const top = held.size ? Math.max(...held) : null;
-        if (top !== curNote) {
-            emit(nowUs);
-            curNote = top;
+        const now = [...held].sort((a, b2) => a - b2);
+        if (!sameSet(now, curNotes)) {
+            close(nowUs);
+            curNotes = now;
             curStartUs = nowUs;
         }
+        if (segments.length >= 48) break;
+    }
+    close(lastUs);
+
+    // Chords -> ascending arpeggios so harmony survives a single piezo voice.
+    const toFreq = (n) => Math.round(440 * Math.pow(2, (n - 69) / 12));
+    const seq = [];
+    for (const s of segments) {
+        if (!s.notes.length) {
+            seq.push([0, Math.min(s.durMs, 2000)]);
+            continue;
+        }
+        if (s.notes.length === 1) {
+            seq.push([toFreq(s.notes[0]), Math.min(s.durMs, 3000)]);
+            continue;
+        }
+        const per = Math.max(70, Math.min(220, Math.floor(s.durMs / s.notes.length)));
+        let used = 0;
+        for (const n of s.notes) {
+            seq.push([toFreq(n), per]);
+            used += per;
+        }
+        const hold = s.durMs - used;
+        if (hold > 120) seq[seq.length - 1][1] += Math.min(hold, 1500);
         if (seq.length >= 64) break;
     }
-    emit(lastUs);
     while (seq.length && seq[0][0] === 0) seq.shift();
     while (seq.length && seq[seq.length - 1][0] === 0) seq.pop();
     return seq.length ? seq.slice(0, 64) : null;
@@ -1094,6 +1124,117 @@ if (cfgForm) {
             el('cfgMsg').textContent = res.error || 'Save failed';
         }
     });
+}
+
+/* ------------------------------- Build pipeline -------------------------- */
+
+const buildBtn = el('buildStartBtn');
+let BUILD_ID = null;
+let buildTimer = null;
+
+async function buildApi(payload) {
+    const r = await fetch('api/build.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, csrf: CSRF })
+    });
+    try { return await r.json(); } catch { return { ok: false, error: 'Bad response' }; }
+}
+
+function renderGates(gates) {
+    const box = el('bGates');
+    box.innerHTML = '';
+    for (const g of gates || []) {
+        const row = document.createElement('div');
+        row.className = 'gate ' + (g.pass ? 'gate-pass' : 'gate-fail');
+        const mark = document.createElement('span');
+        mark.textContent = g.pass ? '\u2713' : '\u2717';
+        const label = document.createElement('span');
+        label.textContent = g.label + ' (' + (g.pass ? '+' + g.points : '0/' + g.points) + ')';
+        row.append(mark, label);
+        if (!g.pass && g.detail) {
+            const d = document.createElement('div');
+            d.className = 'gate-detail';
+            d.textContent = g.detail;
+            row.appendChild(d);
+        }
+        box.appendChild(row);
+    }
+}
+
+async function buildPoll() {
+    if (!BUILD_ID) return;
+    const s = await buildApi({ action: 'status', build_id: BUILD_ID });
+    if (!s.ok) return;
+    el('buildCard').hidden = false;
+    el('bStatus').textContent = s.status;
+    el('bStatus').className = 'tag st-' + s.status;
+    const conf = s.confidence ?? 0;
+    el('bConf').textContent = (s.confidence === null ? '—' : conf + '%');
+    el('bFill').style.width = conf + '%';
+    renderGates(s.gates);
+    if (s.log_tail) {
+        const pre = el('bLog');
+        pre.hidden = false;
+        const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+        pre.textContent = s.log_tail;
+        if (atBottom) pre.scrollTop = pre.scrollHeight;
+    }
+    const done = s.status === 'success' || s.status === 'failed';
+    if (done) {
+        clearInterval(buildTimer);
+        buildTimer = null;
+        buildBtn.disabled = false;
+        el('buildMsg').textContent = s.status === 'success'
+            ? 'Build succeeded at ' + conf + '% \u2014 flash firmware.bin from SD (rename not needed; SKR 3 accepts firmware.bin).'
+            : 'Build stopped at ' + conf + '% \u2014 fix the failed gate and re-run.';
+        if (s.status === 'success') {
+            el('bDownloads').hidden = false;
+            el('dlFw').href  = 'api/build.php?download=' + BUILD_ID + '&type=firmware';
+            el('dlCfg').href = 'api/build.php?download=' + BUILD_ID + '&type=config';
+            el('dlLog').href = 'api/build.php?download=' + BUILD_ID + '&type=log';
+        }
+        buildHistoryRefresh();
+    }
+}
+
+async function buildHistoryRefresh() {
+    const res = await buildApi({ action: 'list', project_id: PROJECT_ID });
+    if (!res.ok || !res.builds.length) return;
+    el('buildHistory').hidden = false;
+    const tb = el('buildHistoryBody');
+    tb.innerHTML = '';
+    for (const b of res.builds) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + b.id + '</td>'
+            + '<td><span class="tag st-' + b.status + '">' + b.status + '</span></td>'
+            + '<td>' + (b.confidence === null ? '\u2014' : b.confidence + '%') + '</td>'
+            + '<td>' + (b.started_at || '\u2014') + '</td>'
+            + '<td>' + (b.finished_at || '\u2014') + '</td>'
+            + '<td>' + (b.status === 'success'
+                ? '<a class="plink" href="api/build.php?download=' + b.id + '&type=firmware">firmware</a> \u00b7 <a class="plink" href="api/build.php?download=' + b.id + '&type=config">config</a>'
+                : (b.status === 'failed' ? '<a class="plink" href="api/build.php?download=' + b.id + '&type=log">log</a>' : '')) + '</td>';
+        tb.appendChild(tr);
+    }
+}
+
+if (buildBtn) {
+    buildBtn.addEventListener('click', async () => {
+        buildBtn.disabled = true;
+        el('buildMsg').textContent = 'Starting\u2026';
+        el('bDownloads').hidden = true;
+        const res = await buildApi({ action: 'start', project_id: PROJECT_ID });
+        if (!res.ok) {
+            el('buildMsg').textContent = res.error || 'Start failed';
+            buildBtn.disabled = false;
+            return;
+        }
+        BUILD_ID = res.build_id;
+        el('buildMsg').textContent = 'Build #' + BUILD_ID + ' running\u2026 first build downloads the STM32 toolchain (several minutes).';
+        buildTimer = setInterval(buildPoll, 2500);
+        buildPoll();
+    });
+    buildHistoryRefresh();
 }
 </script>
 </body>

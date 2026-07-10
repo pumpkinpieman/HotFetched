@@ -238,3 +238,33 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 
 /* Import melody card spans the full row */
 .snd-import-card { grid-column: 1 / -1; }
+
+/* Build pipeline */
+.gates { margin: 12px 0; display: flex; flex-direction: column; gap: 4px; }
+.gate {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--card);
+}
+.gate-pass > span:first-child { color: var(--ok); font-weight: 700; }
+.gate-fail > span:first-child { color: var(--bad); font-weight: 700; }
+.gate-detail { flex-basis: 100%; color: var(--bad); font-size: 12px; padding-left: 20px; }
+.build-log {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--muted);
+}
+a.btn { text-decoration: none; display: inline-block; }
