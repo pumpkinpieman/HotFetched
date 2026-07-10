@@ -1170,7 +1170,7 @@ function hf_validate_fields(array $fields, array $input): array
                 } elseif (isset($f['max']) && $n > $f['max']) {
                     $errors[$key] = 'Maximum ' . $f['max'];
                 }
-                $values[$key] = rtrim(rtrim(sprintf('%.2f', $n), '0'), '.');
+                $values[$key] = rtrim(rtrim(sprintf('%.3f', $n), '0'), '.');
                 break;
 
             case 'select':

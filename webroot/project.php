@@ -1070,7 +1070,7 @@ function cfgRender(fields, values, meta) {
                 if (f.type === 'int' || f.type === 'float') {
                     if (f.min !== undefined) input.min = f.min;
                     if (f.max !== undefined) input.max = f.max;
-                    if (f.type === 'float') input.step = '0.01';
+                    if (f.type === 'float') input.step = 'any';
                 }
                 if (f.maxlen) input.maxLength = f.maxlen;
                 input.value = values[f.key] ?? '';
