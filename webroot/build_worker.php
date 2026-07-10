@@ -264,12 +264,25 @@ $confidence += gate('s2_parse', 'Configuration files parse cleanly', 10, $doc !=
 
 $mbOk = false;
 $mbDetail = '';
+$expectedMb = (string)$board['marlin']['motherboard'];
 if ($doc !== null) {
     $mb = $doc['defines']['MOTHERBOARD'] ?? null;
-    $mbOk = $mb !== null && $mb['enabled'] && trim((string)$mb['value']) === (string)$board['marlin']['motherboard'];
-    $mbDetail = $mbOk ? '' : 'MOTHERBOARD is ' . trim((string)($mb['value'] ?? '(unset)')) . ', expected ' . $board['marlin']['motherboard'] . ' — re-submit the Configuration form';
+    $mbOk = $mb !== null && $mb['enabled'] && trim((string)$mb['value']) === $expectedMb;
+    $mbDetail = $mbOk ? '' : 'MOTHERBOARD is ' . trim((string)($mb['value'] ?? '(unset)')) . ', expected ' . $expectedMb . ' — re-submit the Configuration form';
 }
-$confidence += gate('s2_board', 'MOTHERBOARD matches selected board', 10, $mbOk, $mbDetail);
+$confidence += gate('s2_board', 'MOTHERBOARD matches selected board', 5, $mbOk, $mbDetail);
+
+// The imported source must actually define this board symbol, or the compile
+// dies deep in pins.h with a cryptic "Unknown MOTHERBOARD" #error. Verify the
+// symbol exists in the tree's boards.h so we fail here, clearly, instead.
+$boardsH = $root !== false ? $root . '/Marlin/src/core/boards.h' : '';
+$treeHasBoard = false;
+if (is_file($boardsH)) {
+    $bh = (string)@file_get_contents($boardsH);
+    $treeHasBoard = preg_match('/^\s*#define\s+' . preg_quote($expectedMb, '/') . '\s+\d+/m', $bh) === 1;
+}
+$treeDetail = $treeHasBoard ? '' : $expectedMb . ' is not defined in this Marlin source. The imported firmware version predates this board — import a newer Marlin (2.1.2+ / bugfix-2.1.x) via Replace source, or pick a board this tree supports.';
+$confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin version', 5, $treeHasBoard, $treeDetail);
 
 if ($confidence < 60) {
     bstate('failed', $confidence, true);
