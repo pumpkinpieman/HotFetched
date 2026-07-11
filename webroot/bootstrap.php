@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.9.1';
+const HF_VERSION = '3.3.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -93,7 +93,7 @@ function init_schema(PDO $pdo): void
         CREATE TABLE IF NOT EXISTS projects (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL UNIQUE,
-            firmware     TEXT NOT NULL CHECK(firmware IN ('marlin','klipper')),
+            firmware     TEXT NOT NULL CHECK(firmware IN ('marlin','klipper','reprap')),
             board_id     TEXT NOT NULL,
             mcu_variant  TEXT,
             source_type  TEXT CHECK(source_type IN ('github','zip')),
@@ -142,6 +142,47 @@ function run_migrations(PDO $pdo): void
 
     // Ensure base tables exist even on pre-existing DB files.
     init_schema($pdo);
+
+    // The projects.firmware CHECK originally allowed only marlin|klipper. SQLite
+    // can't ALTER a CHECK constraint, so rebuild the table when 'reprap' is
+    // missing. Data is preserved; this runs once and is a no-op afterwards.
+    $sql = (string)$pdo->query(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'"
+    )->fetchColumn();
+    if ($sql !== '' && !str_contains($sql, "'reprap'")) {
+        $pdo->exec('PRAGMA foreign_keys = OFF');
+        $pdo->beginTransaction();
+        $pdo->exec("
+            CREATE TABLE projects_new (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT NOT NULL UNIQUE,
+                firmware     TEXT NOT NULL CHECK(firmware IN ('marlin','klipper','reprap')),
+                board_id     TEXT NOT NULL,
+                mcu_variant  TEXT,
+                source_type  TEXT CHECK(source_type IN ('github','zip')),
+                source_ref   TEXT,
+                source_state TEXT NOT NULL DEFAULT 'none'
+                             CHECK(source_state IN ('none','fetching','ready','error')),
+                source_error TEXT,
+                source_detect TEXT,
+                created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        ");
+        $pdo->exec("
+            INSERT INTO projects_new
+                (id, name, firmware, board_id, mcu_variant, source_type, source_ref,
+                 source_state, source_error, source_detect, created_at, updated_at)
+            SELECT id, name, firmware, board_id, mcu_variant, source_type, source_ref,
+                   source_state, source_error, source_detect, created_at, updated_at
+            FROM projects
+        ");
+        $pdo->exec('DROP TABLE projects');
+        $pdo->exec('ALTER TABLE projects_new RENAME TO projects');
+        $pdo->commit();
+        $pdo->exec('PRAGMA foreign_keys = ON');
+        error_log('[HotFetched] migrated projects.firmware CHECK to allow reprap');
+    }
 
     $columns = [
         ['projects', 'source_error',  "ALTER TABLE projects ADD COLUMN source_error TEXT"],
@@ -626,6 +667,9 @@ function marlin_field_defs(array $board): array
     $lim     = $board['limits'];
     $drivers = $board['marlin']['valid_drivers'];
 
+    $eSlots = count(array_filter($board['marlin']['driver_slots'] ?? [], fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
+    $eSlots = max(1, $eSlots);
+
     return [
         ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine',
          'type' => 'text', 'maxlen' => 40],
@@ -634,12 +678,18 @@ function marlin_field_defs(array $board): array
         ['key' => 'driver_y',  'label' => 'Y stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_z',  'label' => 'Z stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_e0', 'label' => 'E0 stepper driver', 'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
-        ['key' => 'driver_e1', 'label' => 'E1 stepper driver', 'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers,
-         'requires' => ['extruders' => '2']],
+        ['key' => 'driver_e1', 'label' => 'E1+ stepper driver (used for every extra extruder)', 'group' => 'Stepper Drivers',
+         'type' => 'select', 'options' => $drivers,
+         'requires' => ['extruders' => ['2', '3', '4', '5', '6', '7', '8']]],
 
-        ['key' => 'extruders',    'label' => 'Extruders', 'group' => 'Extruder', 'type' => 'select', 'options' => ['1', '2']],
-        ['key' => 'singlenozzle', 'label' => 'Dual extruder, single nozzle (SINGLENOZZLE)', 'group' => 'Extruder', 'type' => 'bool',
-         'requires' => ['extruders' => '2']],
+        ['key' => 'extruders',    'label' => 'Extruders (logical tools)', 'group' => 'Extruder', 'type' => 'select',
+         // A board can only drive as many E motors as it has slots - except with an
+         // MMU, which reports 5 tools but uses a single E motor. So allow up to 5
+         // for MMU users while still reflecting the board's physical limit.
+         'options' => array_map('strval', range(1, max(5, $eSlots))),
+         'hint' => $eSlots . ' physical E slot(s) on this board; more than that requires an MMU'],
+        ['key' => 'singlenozzle', 'label' => 'Multiple extruders share one nozzle (SINGLENOZZLE)', 'group' => 'Extruder', 'type' => 'bool',
+         'requires' => ['extruders' => ['2', '3', '4', '5', '6', '7', '8']]],
 
         ['key' => 'bed_x',  'label' => 'Bed size X (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_x']],
         ['key' => 'bed_y',  'label' => 'Bed size Y (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_y']],
@@ -756,15 +806,31 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     $set('Z_DRIVER_TYPE',  (string)$v['driver_z']);
     $set('E0_DRIVER_TYPE', (string)$v['driver_e0']);
 
-    $dual = ($v['extruders'] === '2');
-    $set('EXTRUDERS', $dual ? '2' : '1');
-    if ($dual) {
-        $set('E1_DRIVER_TYPE', (string)$v['driver_e1']);
-        $set('SINGLENOZZLE', null, $v['singlenozzle'] === '1');
-    } else {
-        $set('E1_DRIVER_TYPE', $doc['defines']['E1_DRIVER_TYPE']['value'] ?? 'A4988', false);
-        $set('SINGLENOZZLE', null, false);
+    // Extruders. Marlin distinguishes EXTRUDERS (logical tools) from E_STEPPERS
+    // (physical motors). A Prusa MMU2/MMU3 reports 5 tools but drives only ONE
+    // E motor (the unit's own selector picks the filament), so declaring
+    // E1..E4_DRIVER_TYPE there would demand pins the board doesn't have.
+    // Driver types must therefore follow the PHYSICAL stepper count.
+    $nExt = max(1, min(8, (int)($v['extruders'] ?? 1)));
+    $set('EXTRUDERS', (string)$nExt);
+
+    $mmu       = (string)($v['mmu_model'] ?? 'none');
+    $mmuSingle = in_array($mmu, ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3',
+                                 'EXTENDABLE_EMU_MMU2', 'EXTENDABLE_EMU_MMU2S'], true);
+    $eSteppers = $mmuSingle ? 1 : $nExt;
+
+    $extraDrv = (string)($v['driver_e1'] ?? ($doc['defines']['E0_DRIVER_TYPE']['value'] ?? 'A4988'));
+    for ($i = 1; $i <= 7; $i++) {
+        $key = 'E' . $i . '_DRIVER_TYPE';
+        if ($i < $eSteppers) {
+            $set($key, $extraDrv, true);
+        } else {
+            $set($key, $doc['defines'][$key]['value'] ?? 'A4988', false);
+        }
     }
+
+    // MMU_MODEL already implies SINGLENOZZLE in Marlin, so don't fight it.
+    $set('SINGLENOZZLE', null, !$mmuSingle && $nExt >= 2 && ($v['singlenozzle'] ?? '0') === '1');
 
     // Geometry
     $set('X_BED_SIZE', (string)(int)$v['bed_x']);
@@ -842,12 +908,19 @@ function marlin_field_defs_extended(array $board): array
         ['key' => 'probe_off_z', 'label' => 'Probe offset Z (mm)', 'group' => 'Probe',
          'type' => 'float', 'min' => -10, 'max' => 10, 'requires' => ['probe' => $probeActive]],
 
-        ['key' => 'speaker', 'label' => 'Speaker fitted (SPEAKER — piezo tones)', 'group' => 'Audio', 'type' => 'bool'],
-        ['key' => 'startup_tune', 'label' => 'Power-on tune (STARTUP_TUNE)', 'group' => 'Audio',
-         'type' => 'select', 'options' => $tuneOpts, 'option_labels' => $tuneLabels],
-        ['key' => 'startup_tune_custom', 'label' => 'Custom tune (freq,ms pairs e.g. 523,120,0,40,784,180)', 'group' => 'Audio',
-         'type' => 'text', 'maxlen' => 2000, 'requires' => ['startup_tune' => ['custom']]],
     ];
+
+    // Audio only exists if the board actually has a beeper (it normally lives on
+    // the LCD's EXP header). Boards without one - e.g. the SKR Pico - get no
+    // audio fields at all, rather than settings that cannot compile.
+    if ($board['ui']['beeper'] ?? true) {
+        $fields[] = ['key' => 'speaker', 'label' => 'Speaker fitted (SPEAKER — piezo tones)', 'group' => 'Audio', 'type' => 'bool'];
+        $fields[] = ['key' => 'startup_tune', 'label' => 'Power-on tune (STARTUP_TUNE)', 'group' => 'Audio',
+                     'type' => 'select', 'options' => $tuneOpts, 'option_labels' => $tuneLabels];
+        $fields[] = ['key' => 'startup_tune_custom', 'label' => 'Custom tune (freq,ms pairs e.g. 523,120,0,40,784,180)',
+                     'group' => 'Audio', 'type' => 'text', 'maxlen' => 2000,
+                     'requires' => ['startup_tune' => ['custom']]];
+    }
 
     foreach ([
         'ev_print_start' => 'Print start sound',
@@ -933,13 +1006,28 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
 
     // Display: enable the chosen mono screen, disable the others; serial TFT
     // enables the secondary serial port instead.
+    // A BTT TFT wired to EXP1/EXP2 can run in "Marlin mode", where it emulates a
+    // 12864 controller - that gives real MarlinUI menus and a beeper. The user
+    // flips modes on the panel itself; the firmware just needs the 12864 define
+    // enabled, plus the serial port for touch mode. So the dual-mode option sets
+    // BOTH. Touch-only mode sets just the serial port (no MarlinUI, no beeper).
+    $selScreen = (string)($v['screen'] ?? '');
+    $mono12864 = null;
     foreach (($board['marlin']['screens'] ?? []) as $s) {
-        if ($s['type'] !== 'mono128x64') {
-            continue;
+        $t = (string)($s['type'] ?? '');
+        if ($t === 'mono128x64') {
+            $set($s['id'], null, $selScreen === $s['id']);
+            if ($s['id'] === 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER') {
+                $mono12864 = $s['id'];
+            }
+        } elseif ($t === 'marlinui_tft' && $selScreen === $s['id']) {
+            // Emulated 12864: enable the controller define this TFT pretends to be.
+            $def = (string)($s['define'] ?? 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER');
+            $set($def, null, true);
         }
-        $set($s['id'], null, $v['screen'] === $s['id']);
     }
-    $set('SERIAL_PORT_2', '-1', $v['screen'] === 'btt_serial_tft');
+    $isTft = ($selScreen === 'btt_serial_tft' || $selScreen === 'btt_tft_marlin_mode');
+    $set('SERIAL_PORT_2', '-1', $isTft);
 
     // Probe
     foreach (($board['marlin']['probes'] ?? []) as $p) {
@@ -959,8 +1047,17 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
             $fmt($v['probe_off_x']), $fmt($v['probe_off_y']), $fmt($v['probe_off_z'])));
     }
 
-    // Audio
-    $set('SPEAKER', null, $v['speaker'] === '1');
+    // Audio. STARTUP_TUNE needs ALL(HAS_BEEPER, SPEAKER) - and BEEPER_PIN comes
+    // from the LCD's EXP header, so it is unavailable without a MarlinUI display.
+    // Force the tune off in that case rather than emitting a config that can't build.
+    // No beeper on the board at all -> never write SPEAKER/STARTUP_TUNE.
+    $hasBeeper = (bool)($board['ui']['beeper'] ?? true);
+    $hasUI = $hasBeeper && marlin_screen_has_marlinui($board, (string)($v['screen'] ?? ''));
+    $set('SPEAKER', null, $hasBeeper && (($v['speaker'] ?? '0') === '1'));
+    if (!$hasUI || $v['speaker'] !== '1') {
+        $set('STARTUP_TUNE', $keepValue('STARTUP_TUNE'), false);
+        return $applied;
+    }
     switch ($v['startup_tune']) {
         case 'keep':
             break;
@@ -1350,6 +1447,11 @@ function marlin_apply_values_leveling(array &$doc, array $v): array
 function marlin_field_defs_wifi(array $board): array
 {
     if (!($board['wifi']['supported'] ?? false)) {
+        // Marlin's WIFISUPPORT compiles ESP3DLib/AsyncTCP/WebSockets, which are
+        // ESP32-core libraries - it only builds when the MAINBOARD is an ESP32.
+        // None of the boards shipped here are, so the feature is not offered.
+        // (An ESP-01 in the board's WiFi header runs its own firmware and needs
+        // nothing from Marlin - it's just a serial device.)
         return [];
     }
     return [
@@ -1684,36 +1786,887 @@ function rrf_resolve_asset(array $board, bool $allowPrerelease = false): array
         return ['error' => 'Unexpected response from the release API'];
     }
 
+    $matches = fn (string $n): bool =>
+        array_reduce($inc, fn ($c, $t) => $c && str_contains($n, $t), true)
+        && array_reduce($exc, fn ($c, $t) => $c && !str_contains($n, $t), true);
+
+    $seen = [];   // every asset name we looked at, for diagnostics
+
     foreach ($rels as $rel) {
         if (!$allowPrerelease && !empty($rel['prerelease'])) {
             continue;
         }
-        $matches = [];
-        foreach (($rel['assets'] ?? []) as $a) {
+        $tag    = (string)($rel['tag_name'] ?? '?');
+        $assets = (array)($rel['assets'] ?? []);
+        $bins   = [];
+        $zips   = [];
+
+        foreach ($assets as $a) {
             $n = strtolower((string)($a['name'] ?? ''));
-            if (!str_ends_with($n, '.bin') && !str_ends_with($n, '.uf2')) {
+            $seen[] = $n;
+            if (str_ends_with($n, '.bin') || str_ends_with($n, '.uf2')) {
+                if ($matches($n)) {
+                    $bins[] = $a;
+                }
+            } elseif (str_ends_with($n, '.zip')) {
+                $zips[] = $a;
+            }
+        }
+
+        // 1) A per-board binary published directly as a release asset.
+        if (count($bins) === 1) {
+            $a = $bins[0];
+            return ['tag' => $tag, 'name' => (string)$a['name'],
+                    'url' => (string)$a['browser_download_url'], 'size' => (int)($a['size'] ?? 0),
+                    'from' => 'asset'];
+        }
+        if (count($bins) > 1) {
+            $names = array_map(fn ($a) => (string)$a['name'], $bins);
+            return ['error' => 'Several firmware files match this board (' . implode(', ', $names)
+                             . ') - narrow the board pattern.'];
+        }
+
+        // 2) Otherwise TeamGloomy may ship the per-board binaries inside a zip.
+        foreach ($zips as $z) {
+            $tmp = tempnam(sys_get_temp_dir(), 'rrfzip');
+            $zc  = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 180,
+                                                     'header' => "User-Agent: HotFetched\r\n"]]);
+            $data = @file_get_contents((string)$z['browser_download_url'], false, $zc);
+            if ($data === false || @file_put_contents($tmp, $data) === false) {
+                @unlink($tmp);
                 continue;
             }
-            foreach ($inc as $t) {
-                if (!str_contains($n, $t)) { continue 2; }
+            $zip = new ZipArchive();
+            if ($zip->open($tmp) !== true) {
+                @unlink($tmp);
+                continue;
             }
-            foreach ($exc as $t) {
-                if (str_contains($n, $t)) { continue 2; }
+            $hit = null;
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $entry = (string)$zip->getNameIndex($i);
+                $base  = strtolower(basename($entry));
+                $seen[] = 'zip:' . $base;
+                if ((str_ends_with($base, '.bin') || str_ends_with($base, '.uf2')) && $matches($base)) {
+                    $hit = $entry;
+                    break;
+                }
             }
-            $matches[] = $a;
-        }
-        if (count($matches) === 1) {
-            $a = $matches[0];
-            return ['tag' => (string)$rel['tag_name'], 'name' => (string)$a['name'],
-                    'url' => (string)$a['browser_download_url'], 'size' => (int)($a['size'] ?? 0)];
-        }
-        if (count($matches) > 1) {
-            $names = array_map(fn ($a) => (string)$a['name'], $matches);
-            return ['error' => 'Several firmware files match this board (' . implode(', ', $names)
-                             . ') - pick the right one manually from the release page.'];
+            if ($hit !== null) {
+                $bin = $zip->getFromName($hit);
+                $zip->close();
+                @unlink($tmp);
+                if ($bin !== false && strlen($bin) > 1024) {
+                    return ['tag' => $tag, 'name' => basename($hit), 'data' => $bin,
+                            'size' => strlen($bin), 'from' => 'zip:' . (string)$z['name']];
+                }
+            }
+            $zip->close();
+            @unlink($tmp);
         }
     }
-    return ['error' => 'No firmware asset found for this board in the latest releases'];
+
+    // Nothing matched - report what WAS there so the pattern can be fixed.
+    $sample = array_slice(array_values(array_unique($seen)), 0, 40);
+    return ['error' => 'No firmware asset matched this board.',
+            'seen'  => $sample];
+}
+
+
+
+/* ------------------------------------------------- MMU + Language (Tier 3) */
+
+/** Multi-Material Unit models supported by Marlin's MMU_MODEL. */
+function marlin_mmu_models(): array
+{
+    return [
+        'none'                 => null,
+        'PRUSA_MMU1'           => 'PRUSA_MMU1',
+        'PRUSA_MMU2'           => 'PRUSA_MMU2',
+        'PRUSA_MMU2S'          => 'PRUSA_MMU2S',
+        'PRUSA_MMU3'           => 'PRUSA_MMU3',
+        'EXTENDABLE_EMU_MMU2'  => 'EXTENDABLE_EMU_MMU2',
+        'EXTENDABLE_EMU_MMU2S' => 'EXTENDABLE_EMU_MMU2S',
+    ];
+}
+
+/** Models that require exactly 5 extruders (Prusa 5-port units). */
+function marlin_mmu_needs_5(string $m): bool
+{
+    return in_array($m, ['PRUSA_MMU2S', 'PRUSA_MMU3'], true);
+}
+
+/** Models that talk over a serial port (everything except the MMU1 multiplexer). */
+function marlin_mmu_is_serial(string $m): bool
+{
+    return $m !== 'none' && $m !== 'PRUSA_MMU1';
+}
+
+/** Marlin's built-in LCD languages (from Configuration.h LCD_LANGUAGE). */
+function marlin_languages(): array
+{
+    return [
+        'en' => 'English', 'an' => 'Aragonese', 'bg' => 'Bulgarian', 'ca' => 'Catalan',
+        'cz' => 'Czech', 'da' => 'Danish', 'de' => 'German', 'el' => 'Greek (Greece)',
+        'el_CY' => 'Greek (Cyprus)', 'es' => 'Spanish', 'eu' => 'Basque-Euskera',
+        'fi' => 'Finnish', 'fr' => 'French', 'gl' => 'Galician', 'hg' => 'Hinglish',
+        'hr' => 'Croatian', 'hu' => 'Hungarian', 'id' => 'Indonesian', 'it' => 'Italian',
+        'jp_kana' => 'Japanese', 'ko_KR' => 'Korean', 'nl' => 'Dutch', 'pl' => 'Polish',
+        'pt' => 'Portuguese', 'pt_br' => 'Portuguese (Brazilian)', 'ro' => 'Romanian',
+        'ru' => 'Russian', 'sk' => 'Slovak', 'sv' => 'Swedish', 'tr' => 'Turkish',
+        'uk' => 'Ukrainian', 'vi' => 'Vietnamese', 'zh_CN' => 'Chinese (Simplified)',
+        'zh_TW' => 'Chinese (Traditional)',
+    ];
+}
+
+function marlin_field_defs_mmu(array $board): array
+{
+    $langs  = marlin_languages();
+    $models = array_keys(marlin_mmu_models());
+
+    return [
+        ['key' => 'mmu_model', 'label' => 'Multi-Material Unit', 'group' => 'Multi-Material', 'type' => 'select',
+         'options' => $models,
+         'option_labels' => [
+             'none'                 => 'None',
+             'PRUSA_MMU1'           => 'Prusa MMU1 (multiplexer, no serial)',
+             'PRUSA_MMU2'           => 'Prusa MMU2',
+             'PRUSA_MMU2S'          => 'Prusa MMU2S (needs 5 extruders)',
+             'PRUSA_MMU3'           => 'Prusa MMU3 (5 extruders; requires Marlin 2.1.3+ / bugfix-2.1.x)',
+             'EXTENDABLE_EMU_MMU2'  => 'ERCF / SMuFF (MMU2 protocol)',
+             'EXTENDABLE_EMU_MMU2S' => 'ERCF / SMuFF (MMU2S protocol)',
+         ]],
+        ['key' => 'mmu_serial_port', 'label' => 'MMU serial port (UART index on your board)',
+         'group' => 'Multi-Material', 'type' => 'int', 'min' => 0, 'max' => 9,
+         'requires' => ['mmu_model' => ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3', 'EXTENDABLE_EMU_MMU2', 'EXTENDABLE_EMU_MMU2S']]],
+        ['key' => 'mmu_baud', 'label' => 'MMU baud rate', 'group' => 'Multi-Material', 'type' => 'select',
+         'options' => ['9600', '19200', '38400', '57600', '115200', '250000'],
+         'option_labels' => ['9600' => '9600', '19200' => '19200', '38400' => '38400',
+                             '57600' => '57600', '115200' => '115200 (default)', '250000' => '250000'],
+         'requires' => ['mmu_model' => ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3', 'EXTENDABLE_EMU_MMU2', 'EXTENDABLE_EMU_MMU2S']]],
+        ['key' => 'mmu_menus', 'label' => 'Add MMU menu to the LCD', 'group' => 'Multi-Material', 'type' => 'bool',
+         'requires' => ['mmu_model' => ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3', 'EXTENDABLE_EMU_MMU2', 'EXTENDABLE_EMU_MMU2S']]],
+
+        ['key' => 'lcd_language', 'label' => 'LCD language', 'group' => 'Interface', 'type' => 'select',
+         'options' => array_keys($langs), 'option_labels' => $langs],
+    ];
+}
+
+function marlin_current_values_mmu(array $doc, array $adv): array
+{
+    $d = $doc['defines'];
+    $a = $adv['defines'];
+
+    $model = 'none';
+    if (($d['MMU_MODEL']['enabled'] ?? false)) {
+        $v = trim((string)($d['MMU_MODEL']['value'] ?? ''));
+        if (isset(marlin_mmu_models()[$v])) {
+            $model = $v;
+        }
+    }
+    $num = function (array $s, string $k, string $def): string {
+        $e = $s[$k] ?? null;
+        if ($e === null || $e['value'] === null) return $def;
+        return preg_match('/\d+/', (string)$e['value'], $m) ? $m[0] : $def;
+    };
+    $lang = trim((string)($d['LCD_LANGUAGE']['value'] ?? 'en'));
+    if (!isset(marlin_languages()[$lang])) {
+        $lang = 'en';
+    }
+    return [
+        'mmu_model'       => $model,
+        'mmu_serial_port' => $num($a, 'MMU_SERIAL_PORT', '2'),
+        'mmu_baud'        => $num($a, 'MMU_BAUD', '115200'),
+        'mmu_menus'       => ($a['MMU_MENUS']['enabled'] ?? false) ? '1' : '0',
+        'lcd_language'    => $lang,
+    ];
+}
+
+/** MMU_MODEL and LCD_LANGUAGE live in Configuration.h. */
+function marlin_apply_values_mmu_conf(array &$doc, array $v): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+
+    $model = (string)($v['mmu_model'] ?? 'none');
+    $on    = $model !== 'none';
+    $set('MMU_MODEL', $on ? $model : null, $on);
+
+    // Every MMU model requires NOZZLE_PARK_FEATURE so the head can park if the
+    // unit jams. Marlin hard-errors without it.
+    if ($on) {
+        $set('NOZZLE_PARK_FEATURE', $doc['defines']['NOZZLE_PARK_FEATURE']['value'] ?? null, true);
+    }
+
+    $lang = (string)($v['lcd_language'] ?? 'en');
+    if (isset(marlin_languages()[$lang])) {
+        $set('LCD_LANGUAGE', $lang);
+    }
+    return $applied;
+}
+
+/** MMU serial/baud/menus live in Configuration_adv.h. */
+function marlin_apply_values_mmu_adv(array &$adv, array $v, array $board = []): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+
+    $model = (string)($v['mmu_model'] ?? 'none');
+    if (!marlin_mmu_is_serial($model)) {
+        return $applied;
+    }
+    // NOTE: Marlin's define is MMU_BAUD (not MMU_BAUDRATE).
+    $set('MMU_SERIAL_PORT', (string)(int)($v['mmu_serial_port'] ?? 2));
+    $set('MMU_BAUD', (string)(int)($v['mmu_baud'] ?? 115200));
+    // MMU_MENUS requires HAS_MARLINUI_MENU. An external-firmware TFT has no
+    // MarlinUI, so the menu cannot exist there - never write it in that case.
+    $uiOk = $board === [] || marlin_screen_has_marlinui($board, (string)($v['screen'] ?? ''));
+    $set('MMU_MENUS', null, $uiOk && ($v['mmu_menus'] ?? '0') === '1');
+    return $applied;
+}
+
+
+/* --------------------------------------------- Custom melodies (user library) */
+
+function customtunes_file(): string
+{
+    return HF_PRIVATE_DIR . '/custom_tunes.json';
+}
+
+/** @return array<int,array{name:string,source:string,seq:array,created:int}> */
+function customtunes_all(): array
+{
+    $f = customtunes_file();
+    if (!is_file($f)) {
+        return [];
+    }
+    $d = json_decode((string)@file_get_contents($f), true);
+    return is_array($d) ? $d : [];
+}
+
+function customtunes_save_all(array $list): bool
+{
+    if (!is_dir(HF_PRIVATE_DIR)) {
+        @mkdir(HF_PRIVATE_DIR, 0775, true);
+    }
+    return @file_put_contents(customtunes_file(), json_encode(array_values($list), JSON_PRETTY_PRINT)) !== false;
+}
+
+/**
+ * Add a melody to the user library. $seq is [[freqHz, ms], ...] as produced by
+ * the browser-side RTTTL/CSV parsers, so the stored form is already the tone
+ * sequence Marlin needs - no re-parsing at build time.
+ */
+function customtunes_add(string $name, string $source, array $seq): array|string
+{
+    $name = trim($name);
+    if ($name === '') {
+        return 'Give the melody a name';
+    }
+    if (mb_strlen($name) > 60) {
+        return 'Name is too long (60 characters max)';
+    }
+    if ($seq === []) {
+        return 'That melody has no playable notes';
+    }
+    if (count($seq) > 2000) {
+        return 'That melody is too long (2000 notes max)';
+    }
+    // Validate the sequence shape rather than trusting the client.
+    $clean = [];
+    foreach ($seq as $pair) {
+        if (!is_array($pair) || count($pair) < 2) {
+            return 'Malformed melody data';
+        }
+        $f  = (int)$pair[0];
+        $ms = (int)$pair[1];
+        if ($f < 0 || $f > 20000 || $ms < 1 || $ms > 10000) {
+            return 'Melody contains an out-of-range note';
+        }
+        $clean[] = [$f, $ms];
+    }
+
+    $list = customtunes_all();
+    foreach ($list as $t) {
+        if (strcasecmp((string)($t['name'] ?? ''), $name) === 0) {
+            return 'A melody with that name already exists';
+        }
+    }
+    if (count($list) >= 200) {
+        return 'Melody library is full (200 max)';
+    }
+    $entry = ['name' => $name, 'source' => mb_substr($source, 0, 2000),
+              'seq' => $clean, 'created' => time()];
+    $list[] = $entry;
+    if (!customtunes_save_all($list)) {
+        return 'Could not write to the melody library';
+    }
+    return $entry;
+}
+
+function customtunes_delete(string $name): bool
+{
+    $list = customtunes_all();
+    $out  = array_values(array_filter($list, fn ($t) => strcasecmp((string)($t['name'] ?? ''), $name) !== 0));
+    if (count($out) === count($list)) {
+        return false;
+    }
+    return customtunes_save_all($out);
+}
+
+
+/**
+ * True when the selected screen is a MarlinUI display - i.e. Marlin draws the
+ * menus itself and the EXP header provides BEEPER_PIN. External-firmware TFTs
+ * (BTT TFT in touch mode) and "no display" give neither, so features like
+ * MMU_MENUS and STARTUP_TUNE cannot be used with them.
+ */
+function marlin_screen_has_marlinui(array $board, string $screenId): bool
+{
+    if ($screenId === '' || $screenId === 'none') {
+        return false;
+    }
+    foreach (($board['marlin']['screens'] ?? []) as $s) {
+        if (($s['id'] ?? '') === $screenId) {
+            $t = (string)($s['type'] ?? '');
+            // 'marlinui_tft' = BTT TFT in Marlin mode (12864 emulation over EXP1/EXP2):
+            // it DOES give MarlinUI menus and a beeper. Only touch-only and "no
+            // display" lack them.
+            return $t !== 'none' && $t !== 'serial_tft';
+        }
+    }
+    return false;
+}
+
+
+/* ------------------------------------------------ Tier 3: remaining features */
+
+function marlin_field_defs_tier3(array $board): array
+{
+    $zMax   = (int)($board['ui']['z_steppers'] ?? 1);
+    $hasNeo = (bool)($board['ui']['neopixel'] ?? false);
+    $probes = array_values(array_filter(
+        array_column($board['marlin']['probes'] ?? [], 'id'),
+        fn ($p) => $p !== 'none'
+    ));
+
+    $f = [];
+
+    // --- Multiple Z steppers (only where the board actually has the pins) ---
+    if ($zMax > 1) {
+        $zOpts = array_map('strval', range(1, $zMax));
+        $zMulti = array_slice($zOpts, 1); // 2..N
+        $f[] = ['key' => 'z_steppers', 'label' => 'Z stepper motors', 'group' => 'Multiple Z',
+                'type' => 'select', 'options' => $zOpts,
+                'option_labels' => array_combine($zOpts, array_map(
+                    fn ($n) => $n === '1' ? '1 (single Z)' : $n . ' Z motors', $zOpts))];
+        $f[] = ['key' => 'z_align', 'label' => 'Z levelling method', 'group' => 'Multiple Z',
+                'type' => 'select', 'options' => ['none', 'auto_align', 'multi_endstops'],
+                'option_labels' => [
+                    'none'           => 'None (motors move together)',
+                    'auto_align'     => 'G34 auto-align with the probe (recommended)',
+                    'multi_endstops' => 'Independent endstops per Z motor',
+                ],
+                'requires' => ['z_steppers' => $zMulti]];
+        $f[] = ['key' => 'z_align_iterations', 'label' => 'G34 alignment iterations', 'group' => 'Multiple Z',
+                'type' => 'int', 'min' => 1, 'max' => 10,
+                'requires' => ['z_align' => ['auto_align']]];
+    }
+
+    // --- Input shaping (ringing/ghosting compensation) ---
+    $f[] = ['key' => 'shaping_x', 'label' => 'Input shaping X', 'group' => 'Input Shaping', 'type' => 'bool'];
+    $f[] = ['key' => 'shaping_freq_x', 'label' => 'X resonant frequency (Hz, from M593/ringing tower)',
+            'group' => 'Input Shaping', 'type' => 'float', 'min' => 5, 'max' => 200,
+            'requires' => ['shaping_x' => ['1']]];
+    $f[] = ['key' => 'shaping_zeta_x', 'label' => 'X damping ratio (0-1)', 'group' => 'Input Shaping',
+            'type' => 'float', 'min' => 0, 'max' => 1, 'requires' => ['shaping_x' => ['1']]];
+    $f[] = ['key' => 'shaping_y', 'label' => 'Input shaping Y', 'group' => 'Input Shaping', 'type' => 'bool'];
+    $f[] = ['key' => 'shaping_freq_y', 'label' => 'Y resonant frequency (Hz)', 'group' => 'Input Shaping',
+            'type' => 'float', 'min' => 5, 'max' => 200, 'requires' => ['shaping_y' => ['1']]];
+    $f[] = ['key' => 'shaping_zeta_y', 'label' => 'Y damping ratio (0-1)', 'group' => 'Input Shaping',
+            'type' => 'float', 'min' => 0, 'max' => 1, 'requires' => ['shaping_y' => ['1']]];
+
+    // --- Babystepping ---
+    $f[] = ['key' => 'babystepping', 'label' => 'Babystepping (live Z adjust while printing)',
+            'group' => 'Babystepping', 'type' => 'bool'];
+    $f[] = ['key' => 'babystep_zprobe', 'label' => 'Babystep adjusts the probe Z-offset (M851)',
+            'group' => 'Babystepping', 'type' => 'bool', 'requires' => ['babystepping' => ['1']]];
+
+    // --- Motion extras ---
+    $f[] = ['key' => 'arc_support', 'label' => 'Arc support (G2/G3 curves)', 'group' => 'Motion Extras', 'type' => 'bool'];
+    $f[] = ['key' => 'nozzle_park', 'label' => 'Nozzle park (G27, and parking on pause)',
+            'group' => 'Motion Extras', 'type' => 'bool'];
+    $f[] = ['key' => 'park_z', 'label' => 'Park Z lift (mm)', 'group' => 'Motion Extras',
+            'type' => 'int', 'min' => 1, 'max' => 100, 'requires' => ['nozzle_park' => ['1']]];
+
+    // --- NeoPixel (only where the board exposes a pin) ---
+    if ($hasNeo) {
+        $f[] = ['key' => 'neopixel', 'label' => 'NeoPixel RGB strip', 'group' => 'Lighting', 'type' => 'bool'];
+        $f[] = ['key' => 'neopixel_type', 'label' => 'LED type', 'group' => 'Lighting', 'type' => 'select',
+                'options' => ['NEO_GRB', 'NEO_RGB', 'NEO_GRBW', 'NEO_RGBW'],
+                'option_labels' => ['NEO_GRB' => 'NEO_GRB (most common)', 'NEO_RGB' => 'NEO_RGB',
+                                    'NEO_GRBW' => 'NEO_GRBW (with white)', 'NEO_RGBW' => 'NEO_RGBW'],
+                'requires' => ['neopixel' => ['1']]];
+        $f[] = ['key' => 'neopixel_pixels', 'label' => 'Number of LEDs', 'group' => 'Lighting',
+                'type' => 'int', 'min' => 1, 'max' => 200, 'requires' => ['neopixel' => ['1']]];
+        $f[] = ['key' => 'neopixel_test', 'label' => 'Cycle colours at startup', 'group' => 'Lighting',
+                'type' => 'bool', 'requires' => ['neopixel' => ['1']]];
+    }
+
+    return $f;
+}
+
+function marlin_current_values_tier3(array $doc, array $adv, array $board): array
+{
+    $d = $doc['defines'];
+    $a = $adv['defines'];
+    $on  = fn (array $s, string $k): string => ($s[$k]['enabled'] ?? false) ? '1' : '0';
+    $num = function (array $s, string $k, string $def): string {
+        $e = $s[$k] ?? null;
+        if ($e === null || $e['value'] === null) return $def;
+        return preg_match('/-?\d+(?:\.\d+)?/', (string)$e['value'], $m) ? $m[0] : $def;
+    };
+
+    // Z steppers are implied by Z2/Z3/Z4_DRIVER_TYPE being enabled.
+    $z = 1;
+    foreach ([2, 3, 4] as $i) {
+        if ($d['Z' . $i . '_DRIVER_TYPE']['enabled'] ?? false) {
+            $z = $i;
+        }
+    }
+    $zAlign = 'none';
+    if ($a['Z_STEPPER_AUTO_ALIGN']['enabled'] ?? false) {
+        $zAlign = 'auto_align';
+    } elseif ($a['Z_MULTI_ENDSTOPS']['enabled'] ?? false) {
+        $zAlign = 'multi_endstops';
+    }
+
+    // NOZZLE_PARK_POINT is { X, Y, Z } - pull the Z component if it's a plain number.
+    $parkZ = '20';
+    $ppRaw = (string)($d['NOZZLE_PARK_POINT']['value'] ?? '');
+    // \x7d is the closing brace; using the hex escape keeps brace-counting sane.
+    if (preg_match('/,\s*(\d+)\s*\x7d/', $ppRaw, $m)) {
+        $parkZ = $m[1];
+    }
+
+    $v = [
+        'z_steppers'         => (string)$z,
+        'z_align'            => $zAlign,
+        'z_align_iterations' => $num($a, 'Z_STEPPER_ALIGN_ITERATIONS', '5'),
+        'shaping_x'          => $on($a, 'INPUT_SHAPING_X'),
+        'shaping_freq_x'     => $num($a, 'SHAPING_FREQ_X', '40'),
+        'shaping_zeta_x'     => $num($a, 'SHAPING_ZETA_X', '0.15'),
+        'shaping_y'          => $on($a, 'INPUT_SHAPING_Y'),
+        'shaping_freq_y'     => $num($a, 'SHAPING_FREQ_Y', '40'),
+        'shaping_zeta_y'     => $num($a, 'SHAPING_ZETA_Y', '0.15'),
+        'babystepping'       => $on($a, 'BABYSTEPPING'),
+        'babystep_zprobe'    => $on($a, 'BABYSTEP_ZPROBE_OFFSET'),
+        'arc_support'        => $on($a, 'ARC_SUPPORT'),
+        'nozzle_park'        => $on($d, 'NOZZLE_PARK_FEATURE'),
+        'park_z'             => $parkZ,
+    ];
+    if ($board['ui']['neopixel'] ?? false) {
+        $v['neopixel']        = $on($d, 'NEOPIXEL_LED');
+        $v['neopixel_type']   = trim((string)($d['NEOPIXEL_TYPE']['value'] ?? 'NEO_GRB'));
+        $v['neopixel_pixels'] = $num($d, 'NEOPIXEL_PIXELS', '30');
+        $v['neopixel_test']   = $on($d, 'NEOPIXEL_STARTUP_TEST');
+    }
+    return $v;
+}
+
+/** Tier-3 settings that live in Configuration.h. */
+function marlin_apply_values_tier3_conf(array &$doc, array $v, array $board): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+
+    // Z2/Z3/Z4_DRIVER_TYPE is what tells Marlin how many Z motors exist
+    // (NUM_Z_STEPPERS is derived from these, not set directly).
+    $zMax = (int)($board['ui']['z_steppers'] ?? 1);
+    $z    = max(1, min($zMax, (int)($v['z_steppers'] ?? 1)));
+    $zDrv = (string)($v['driver_z'] ?? ($doc['defines']['Z_DRIVER_TYPE']['value'] ?? 'A4988'));
+    foreach ([2, 3, 4] as $i) {
+        $key = 'Z' . $i . '_DRIVER_TYPE';
+        $set($key, $i <= $z ? $zDrv : ($doc['defines'][$key]['value'] ?? 'A4988'), $i <= $z);
+    }
+
+    // Nozzle park. NOTE: other features (runout, MMU) also force this on, so only
+    // ever turn it OFF when nothing else needs it.
+    $parkWanted = ($v['nozzle_park'] ?? '0') === '1';
+    $forcedOn   = ($v['runout'] ?? '0') === '1' || (string)($v['mmu_model'] ?? 'none') !== 'none';
+    $set('NOZZLE_PARK_FEATURE', $doc['defines']['NOZZLE_PARK_FEATURE']['value'] ?? null,
+         $parkWanted || $forcedOn);
+    if ($parkWanted || $forcedOn) {
+        $pz = max(1, min(100, (int)($v['park_z'] ?? 20)));
+        $set('NOZZLE_PARK_POINT', '{ (X_MIN_POS + 10), (Y_MAX_POS - 10), ' . $pz . ' }');
+    }
+
+    if ($board['ui']['neopixel'] ?? false) {
+        $neo = ($v['neopixel'] ?? '0') === '1';
+        $set('NEOPIXEL_LED', null, $neo);
+        if ($neo) {
+            $set('NEOPIXEL_TYPE', (string)($v['neopixel_type'] ?? 'NEO_GRB'));
+            $set('NEOPIXEL_PIXELS', (string)max(1, min(200, (int)($v['neopixel_pixels'] ?? 30))));
+            $set('NEOPIXEL_STARTUP_TEST', null, ($v['neopixel_test'] ?? '0') === '1');
+        }
+    }
+    return $applied;
+}
+
+/** Tier-3 settings that live in Configuration_adv.h. */
+function marlin_apply_values_tier3_adv(array &$adv, array $v, array $board): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+    $keep = fn (string $k): ?string => $adv['defines'][$k]['value'] ?? null;
+    $fmt  = fn ($x): string => rtrim(rtrim(sprintf('%.2f', (float)$x), '0'), '.') ?: '0';
+
+    // Multiple Z
+    $zMax = (int)($board['ui']['z_steppers'] ?? 1);
+    $z    = max(1, min($zMax, (int)($v['z_steppers'] ?? 1)));
+    $mode = $z > 1 ? (string)($v['z_align'] ?? 'none') : 'none';
+    $set('Z_STEPPER_AUTO_ALIGN', $keep('Z_STEPPER_AUTO_ALIGN'), $mode === 'auto_align');
+    $set('Z_MULTI_ENDSTOPS', $keep('Z_MULTI_ENDSTOPS'), $mode === 'multi_endstops');
+    if ($mode === 'auto_align') {
+        $set('Z_STEPPER_ALIGN_ITERATIONS', (string)max(1, min(10, (int)($v['z_align_iterations'] ?? 5))));
+    }
+
+    // Input shaping
+    $sx = ($v['shaping_x'] ?? '0') === '1';
+    $sy = ($v['shaping_y'] ?? '0') === '1';
+    $set('INPUT_SHAPING_X', $keep('INPUT_SHAPING_X'), $sx);
+    $set('INPUT_SHAPING_Y', $keep('INPUT_SHAPING_Y'), $sy);
+    if ($sx) {
+        $set('SHAPING_FREQ_X', $fmt($v['shaping_freq_x'] ?? 40));
+        $set('SHAPING_ZETA_X', $fmt($v['shaping_zeta_x'] ?? 0.15));
+    }
+    if ($sy) {
+        $set('SHAPING_FREQ_Y', $fmt($v['shaping_freq_y'] ?? 40));
+        $set('SHAPING_ZETA_Y', $fmt($v['shaping_zeta_y'] ?? 0.15));
+    }
+
+    // Babystepping. BABYSTEP_ZPROBE_OFFSET needs a probe and is invalid with
+    // MESH_BED_LEVELING, so only enable it when both conditions hold.
+    $bs = ($v['babystepping'] ?? '0') === '1';
+    $set('BABYSTEPPING', $keep('BABYSTEPPING'), $bs);
+    $probeOn = (string)($v['probe'] ?? 'none') !== 'none';
+    $meshLvl = (string)($v['leveling'] ?? 'none') === 'mesh';
+    $set('BABYSTEP_ZPROBE_OFFSET', $keep('BABYSTEP_ZPROBE_OFFSET'),
+         $bs && $probeOn && !$meshLvl && ($v['babystep_zprobe'] ?? '0') === '1');
+
+    $set('ARC_SUPPORT', $keep('ARC_SUPPORT'), ($v['arc_support'] ?? '0') === '1');
+
+    return $applied;
+}
+
+
+/* ------------------------------------------- Board catalog self-check */
+
+/**
+ * Validate every board JSON at startup. Data bugs (a missing limits block, a
+ * Klipper seed without its arch parent, a board claiming a firmware it has no
+ * config for) otherwise surface as bizarre UI behaviour or a compile failure
+ * ten minutes later. Cheap to check; expensive to debug. Logged, never fatal.
+ *
+ * @return array<int,string> Human-readable problems (empty = catalog is clean).
+ */
+function boards_self_check(): array
+{
+    $problems = [];
+    $reqLimits = ['max_bed_x', 'max_bed_y', 'max_z', 'max_hotend_temp',
+                  'max_bed_temp', 'max_feedrate_xy', 'max_feedrate_z'];
+
+    foreach (glob(__DIR__ . '/boards/*.json') as $path) {
+        $name = basename($path);
+        $b    = json_decode((string)@file_get_contents($path), true);
+        if (!is_array($b)) {
+            $problems[] = "{$name}: not valid JSON";
+            continue;
+        }
+        $id = (string)($b['id'] ?? $name);
+
+        foreach (['id', 'name', 'vendor', 'mcu_variants', 'firmware_support', 'limits'] as $k) {
+            if (!isset($b[$k])) {
+                $problems[] = "{$id}: missing '{$k}'";
+            }
+        }
+        if (empty($b['mcu_variants'])) {
+            $problems[] = "{$id}: no mcu_variants";
+        }
+
+        // Limits must exist and be positive, or fields get an impossible range.
+        foreach ($reqLimits as $k) {
+            $val = $b['limits'][$k] ?? null;
+            if (!is_numeric($val) || (float)$val <= 0) {
+                $problems[] = "{$id}: limits.{$k} is missing or not positive";
+            }
+        }
+
+        $fs = $b['firmware_support'] ?? [];
+
+        if (!empty($fs['marlin'])) {
+            if (empty($b['marlin']['motherboard'])) {
+                $problems[] = "{$id}: claims Marlin support but has no motherboard define";
+            }
+            foreach (($b['mcu_variants'] ?? []) as $mv) {
+                if (empty($mv['marlin_env'])) {
+                    $problems[] = "{$id}: MCU '{$mv['id']}' has no marlin_env";
+                }
+            }
+        }
+
+        if (!empty($fs['klipper'])) {
+            $k = $b['klipper'] ?? [];
+            if (empty($k['reference_config']) || empty($k['mach']) || empty($k['artifact'])) {
+                $problems[] = "{$id}: incomplete klipper block";
+                continue;
+            }
+            $seed = implode("\n", (array)($k['config_seed'] ?? []));
+            $mach = (string)$k['mach'];
+            // The arch CHOICE parent must be present, not just the sub-model -
+            // without it Kconfig silently keeps its AVR default.
+            $parent = null;
+            if (str_contains($mach, 'STM32'))       { $parent = 'CONFIG_MACH_STM32'; }
+            elseif (str_contains($mach, 'LPC17'))   { $parent = 'CONFIG_MACH_LPC176X'; }
+            elseif (str_contains($mach, 'RP2040'))  { $parent = 'CONFIG_MACH_RPXXXX'; }
+            elseif (str_contains($mach, 'atmega'))  { $parent = 'CONFIG_MACH_AVR'; }
+            if ($parent !== null && !str_contains($seed, $parent . '=y')) {
+                $problems[] = "{$id}: klipper seed is missing the arch parent {$parent} (would build the wrong MCU)";
+            }
+            if (!str_contains($seed, $mach . '=y') && !str_contains($seed, '{MACH}=y')) {
+                $problems[] = "{$id}: klipper seed never selects {$mach}";
+            }
+        }
+
+        if (!empty($fs['reprap']) && empty($b['rrf']['asset_include'])) {
+            $problems[] = "{$id}: claims RRF support but has no asset pattern";
+        }
+    }
+    return $problems;
+}
+
+/** Run the self-check once per process and log anything wrong. */
+function boards_self_check_once(): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+    $problems = boards_self_check();
+    foreach ($problems as $p) {
+        error_log('[HotFetched] board catalog: ' . $p);
+    }
+    if ($problems !== []) {
+        error_log('[HotFetched] board catalog: ' . count($problems) . ' problem(s) found - see above.');
+    }
+}
+
+
+/* ------------------------------------------- Tier 4: advanced motion */
+
+function marlin_field_defs_tier4(array $board): array
+{
+    $shapers = ['NONE', 'ZV', 'ZVD', 'ZVDD', 'ZVDDD', 'EI', '2HEI', '3HEI', 'MZV'];
+    $shaperLabels = array_combine($shapers, [
+        'None', 'ZV (fastest)', 'ZVD', 'ZVDD', 'ZVDDD',
+        'EI', '2HEI', '3HEI', 'MZV (robust)',
+    ]);
+
+    return [
+        // --- Acceleration shaping ---
+        ['key' => 's_curve', 'label' => 'S-curve acceleration (smoother ramps)',
+         'group' => 'Advanced Motion', 'type' => 'bool'],
+        ['key' => 'step_smoothing', 'label' => 'Adaptive step smoothing (quieter, less aliasing)',
+         'group' => 'Advanced Motion', 'type' => 'bool'],
+
+        // --- Backlash ---
+        ['key' => 'backlash', 'label' => 'Backlash compensation', 'group' => 'Backlash', 'type' => 'bool'],
+        ['key' => 'backlash_x', 'label' => 'X backlash (mm)', 'group' => 'Backlash', 'type' => 'float',
+         'min' => 0, 'max' => 5, 'requires' => ['backlash' => ['1']]],
+        ['key' => 'backlash_y', 'label' => 'Y backlash (mm)', 'group' => 'Backlash', 'type' => 'float',
+         'min' => 0, 'max' => 5, 'requires' => ['backlash' => ['1']]],
+        ['key' => 'backlash_z', 'label' => 'Z backlash (mm)', 'group' => 'Backlash', 'type' => 'float',
+         'min' => 0, 'max' => 5, 'requires' => ['backlash' => ['1']]],
+        ['key' => 'backlash_correction', 'label' => 'Correction factor (0 = off, 1 = full)',
+         'group' => 'Backlash', 'type' => 'float', 'min' => 0, 'max' => 1,
+         'requires' => ['backlash' => ['1']]],
+        ['key' => 'backlash_smoothing', 'label' => 'Smoothing distance (mm, 0 = off)',
+         'group' => 'Backlash', 'type' => 'float', 'min' => 0, 'max' => 20,
+         'requires' => ['backlash' => ['1']]],
+
+        // --- Firmware retraction ---
+        ['key' => 'fwretract', 'label' => 'Firmware retraction (G10/G11)',
+         'group' => 'Firmware Retraction', 'type' => 'bool'],
+        ['key' => 'fwretract_auto', 'label' => 'Override slicer retractions (autoretract)',
+         'group' => 'Firmware Retraction', 'type' => 'bool', 'requires' => ['fwretract' => ['1']]],
+        ['key' => 'retract_length', 'label' => 'Retract length (mm)', 'group' => 'Firmware Retraction',
+         'type' => 'float', 'min' => 0, 'max' => 20, 'requires' => ['fwretract' => ['1']]],
+        ['key' => 'retract_feedrate', 'label' => 'Retract feedrate (mm/s)', 'group' => 'Firmware Retraction',
+         'type' => 'float', 'min' => 1, 'max' => 200, 'requires' => ['fwretract' => ['1']]],
+        ['key' => 'retract_zraise', 'label' => 'Z-hop on retract (mm)', 'group' => 'Firmware Retraction',
+         'type' => 'float', 'min' => 0, 'max' => 10, 'requires' => ['fwretract' => ['1']]],
+        ['key' => 'recover_length', 'label' => 'Extra recover length (mm)', 'group' => 'Firmware Retraction',
+         'type' => 'float', 'min' => -5, 'max' => 20, 'requires' => ['fwretract' => ['1']]],
+        ['key' => 'recover_feedrate', 'label' => 'Recover feedrate (mm/s)', 'group' => 'Firmware Retraction',
+         'type' => 'float', 'min' => 1, 'max' => 200, 'requires' => ['fwretract' => ['1']]],
+
+        // --- Nozzle clean ---
+        ['key' => 'nozzle_clean', 'label' => 'Nozzle clean / wipe (G12)', 'group' => 'Nozzle Clean', 'type' => 'bool'],
+        ['key' => 'clean_pattern', 'label' => 'Default wipe pattern', 'group' => 'Nozzle Clean', 'type' => 'select',
+         'options' => ['0', '1', '2'],
+         'option_labels' => ['0' => 'Line', '1' => 'Zig-zag', '2' => 'Circle'],
+         'requires' => ['nozzle_clean' => ['1']]],
+        ['key' => 'clean_strokes', 'label' => 'Strokes', 'group' => 'Nozzle Clean', 'type' => 'int',
+         'min' => 1, 'max' => 20, 'requires' => ['nozzle_clean' => ['1']]],
+
+        // --- Fixed-Time Motion (alternative engine) ---
+        ['key' => 'ft_motion', 'label' => 'Fixed-Time Motion (FT_MOTION — replaces Input Shaping)',
+         'group' => 'Fixed-Time Motion', 'type' => 'bool'],
+        ['key' => 'ft_default', 'label' => 'Use FT Motion by default at power-on',
+         'group' => 'Fixed-Time Motion', 'type' => 'bool', 'requires' => ['ft_motion' => ['1']]],
+        ['key' => 'ft_shaper_x', 'label' => 'X shaper', 'group' => 'Fixed-Time Motion', 'type' => 'select',
+         'options' => $shapers, 'option_labels' => $shaperLabels, 'requires' => ['ft_motion' => ['1']]],
+        ['key' => 'ft_freq_x', 'label' => 'X peak frequency (Hz)', 'group' => 'Fixed-Time Motion',
+         'type' => 'float', 'min' => 5, 'max' => 200, 'requires' => ['ft_motion' => ['1']]],
+        ['key' => 'ft_shaper_y', 'label' => 'Y shaper', 'group' => 'Fixed-Time Motion', 'type' => 'select',
+         'options' => $shapers, 'option_labels' => $shaperLabels, 'requires' => ['ft_motion' => ['1']]],
+        ['key' => 'ft_freq_y', 'label' => 'Y peak frequency (Hz)', 'group' => 'Fixed-Time Motion',
+         'type' => 'float', 'min' => 5, 'max' => 200, 'requires' => ['ft_motion' => ['1']]],
+    ];
+}
+
+function marlin_current_values_tier4(array $adv): array
+{
+    $a   = $adv['defines'];
+    $on  = fn (string $k): string => ($a[$k]['enabled'] ?? false) ? '1' : '0';
+    $num = function (string $k, string $def) use ($a): string {
+        $e = $a[$k] ?? null;
+        if ($e === null || $e['value'] === null) return $def;
+        return preg_match('/-?\d+(?:\.\d+)?/', (string)$e['value'], $m) ? $m[0] : $def;
+    };
+    // BACKLASH_DISTANCE_MM is { x, y, z }
+    $bl = [0, 0, 0];
+    if (preg_match_all('/-?\d+(?:\.\d+)?/', (string)($a['BACKLASH_DISTANCE_MM']['value'] ?? ''), $m)) {
+        foreach (array_slice($m[0], 0, 3) as $i => $x) {
+            $bl[$i] = $x;
+        }
+    }
+    // FTM_DEFAULT_SHAPER_X is 'ftMotionShaper_ZV' etc.
+    $shaper = function (string $k) use ($a): string {
+        $raw = (string)($a[$k]['value'] ?? '');
+        return preg_match('/ftMotionShaper_(\w+)/', $raw, $m) ? $m[1] : 'NONE';
+    };
+
+    return [
+        's_curve'             => $on('S_CURVE_ACCELERATION'),
+        'step_smoothing'      => $on('ADAPTIVE_STEP_SMOOTHING'),
+        'backlash'            => $on('BACKLASH_COMPENSATION'),
+        'backlash_x'          => (string)$bl[0],
+        'backlash_y'          => (string)$bl[1],
+        'backlash_z'          => (string)$bl[2],
+        'backlash_correction' => $num('BACKLASH_CORRECTION', '0.0'),
+        'backlash_smoothing'  => $num('BACKLASH_SMOOTHING_MM', '3'),
+        'fwretract'           => $on('FWRETRACT'),
+        'fwretract_auto'      => $on('FWRETRACT_AUTORETRACT'),
+        'retract_length'      => $num('RETRACT_LENGTH', '3'),
+        'retract_feedrate'    => $num('RETRACT_FEEDRATE', '45'),
+        'retract_zraise'      => $num('RETRACT_ZRAISE', '0'),
+        'recover_length'      => $num('RETRACT_RECOVER_LENGTH', '0'),
+        'recover_feedrate'    => $num('RETRACT_RECOVER_FEEDRATE', '8'),
+        'nozzle_clean'        => $on('NOZZLE_CLEAN_FEATURE'),
+        'clean_pattern'       => $num('NOZZLE_CLEAN_DEFAULT_PATTERN', '1'),
+        'clean_strokes'       => $num('NOZZLE_CLEAN_STROKES', '12'),
+        'ft_motion'           => $on('FT_MOTION'),
+        'ft_default'          => $on('FTM_IS_DEFAULT_MOTION'),
+        'ft_shaper_x'         => $shaper('FTM_DEFAULT_SHAPER_X'),
+        'ft_freq_x'           => $num('FTM_SHAPING_DEFAULT_FREQ_X', '37'),
+        'ft_shaper_y'         => $shaper('FTM_DEFAULT_SHAPER_Y'),
+        'ft_freq_y'           => $num('FTM_SHAPING_DEFAULT_FREQ_Y', '37'),
+    ];
+}
+
+/** All Tier-4 settings live in Configuration_adv.h. */
+function marlin_apply_values_tier4_adv(array &$adv, array $v): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+    $keep = fn (string $k): ?string => $adv['defines'][$k]['value'] ?? null;
+    $f    = fn ($x, int $dp = 2): string => rtrim(rtrim(sprintf('%.' . $dp . 'f', (float)$x), '0'), '.') ?: '0';
+
+    $set('S_CURVE_ACCELERATION', $keep('S_CURVE_ACCELERATION'), ($v['s_curve'] ?? '0') === '1');
+    $set('ADAPTIVE_STEP_SMOOTHING', $keep('ADAPTIVE_STEP_SMOOTHING'), ($v['step_smoothing'] ?? '0') === '1');
+
+    // Backlash. Marlin errors unless DISTANCE_MM and CORRECTION are both present.
+    $bl = ($v['backlash'] ?? '0') === '1';
+    $set('BACKLASH_COMPENSATION', $keep('BACKLASH_COMPENSATION'), $bl);
+    if ($bl) {
+        $set('BACKLASH_DISTANCE_MM', '{ ' . $f($v['backlash_x'] ?? 0, 3) . ', '
+                                         . $f($v['backlash_y'] ?? 0, 3) . ', '
+                                         . $f($v['backlash_z'] ?? 0, 3) . ' }');
+        $set('BACKLASH_CORRECTION', $f($v['backlash_correction'] ?? 0));
+        $sm = (float)($v['backlash_smoothing'] ?? 0);
+        $set('BACKLASH_SMOOTHING_MM', $sm > 0 ? $f($sm) : $keep('BACKLASH_SMOOTHING_MM'), $sm > 0);
+    }
+
+    // Firmware retraction
+    $fr = ($v['fwretract'] ?? '0') === '1';
+    $set('FWRETRACT', $keep('FWRETRACT'), $fr);
+    if ($fr) {
+        $set('FWRETRACT_AUTORETRACT', null, ($v['fwretract_auto'] ?? '0') === '1');
+        $set('RETRACT_LENGTH', $f($v['retract_length'] ?? 3));
+        $set('RETRACT_FEEDRATE', $f($v['retract_feedrate'] ?? 45));
+        $set('RETRACT_ZRAISE', $f($v['retract_zraise'] ?? 0));
+        $set('RETRACT_RECOVER_LENGTH', $f($v['recover_length'] ?? 0));
+        $set('RETRACT_RECOVER_FEEDRATE', $f($v['recover_feedrate'] ?? 8));
+    }
+
+    // Nozzle clean. At least one pattern must be enabled, and the default pattern
+    // must be one that IS enabled - so enable all three and pick the default.
+    $nc = ($v['nozzle_clean'] ?? '0') === '1';
+    $set('NOZZLE_CLEAN_FEATURE', $keep('NOZZLE_CLEAN_FEATURE'), $nc);
+    if ($nc) {
+        $set('NOZZLE_CLEAN_PATTERN_LINE', null, true);
+        $set('NOZZLE_CLEAN_PATTERN_ZIGZAG', null, true);
+        $set('NOZZLE_CLEAN_PATTERN_CIRCLE', null, true);
+        $set('NOZZLE_CLEAN_DEFAULT_PATTERN', (string)(int)($v['clean_pattern'] ?? 1));
+        $set('NOZZLE_CLEAN_STROKES', (string)max(1, min(20, (int)($v['clean_strokes'] ?? 12))));
+    }
+
+    // Fixed-Time Motion: an alternative motion engine with its own shapers.
+    // It supersedes INPUT_SHAPING_X/Y, so the two are gated apart in Stage 1.
+    $ft = ($v['ft_motion'] ?? '0') === '1';
+    $set('FT_MOTION', $keep('FT_MOTION'), $ft);
+    if ($ft) {
+        $set('FTM_IS_DEFAULT_MOTION', null, ($v['ft_default'] ?? '0') === '1');
+        $sx = strtoupper((string)($v['ft_shaper_x'] ?? 'NONE'));
+        $sy = strtoupper((string)($v['ft_shaper_y'] ?? 'NONE'));
+        $set('FTM_DEFAULT_SHAPER_X', 'ftMotionShaper_' . $sx);
+        $set('FTM_DEFAULT_SHAPER_Y', 'ftMotionShaper_' . $sy);
+        $set('FTM_SHAPING_DEFAULT_FREQ_X', $f($v['ft_freq_x'] ?? 37, 1) . 'f');
+        $set('FTM_SHAPING_DEFAULT_FREQ_Y', $f($v['ft_freq_y'] ?? 37, 1) . 'f');
+    }
+
+    return $applied;
 }
 
 /* ------------------------------------------------- Bootscreen generator */
@@ -2366,3 +3319,8 @@ function klipper_config_seed(array $board, array $variant): ?string
     $lines = array_map(fn ($l) => str_replace('{MACH}', $mach, $l), $seed);
     return implode("\n", $lines) . "\n";
 }
+
+// Validate the shipped board catalog once per process. Problems are logged to
+// the container log (docker logs HotFetched), never fatal — a malformed board
+// should announce itself, not silently produce a broken config.
+boards_self_check_once();

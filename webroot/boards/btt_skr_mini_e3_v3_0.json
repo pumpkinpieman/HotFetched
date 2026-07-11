@@ -65,8 +65,14 @@
         "type": "mono128x64"
       },
       {
+        "id": "btt_tft_marlin_mode",
+        "label": "BTT TFT35/TFT70 (Marlin mode + touch \u2014 EXP1/EXP2 wired)",
+        "type": "marlinui_tft",
+        "define": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER"
+      },
+      {
         "id": "btt_serial_tft",
-        "label": "BTT TFT35/TFT70 (touch mode, external firmware)",
+        "label": "BTT TFT35/TFT70 (touch mode only \u2014 no Marlin menus/beeper)",
         "type": "serial_tft"
       }
     ],
@@ -155,7 +161,8 @@
   "min_marlin": "2.1",
   "wifi": {
     "supported": false,
-    "module": null
+    "module": null,
+    "note": "Marlin's WIFISUPPORT pulls in ESP32-only libraries (ESP3DLib, AsyncTCP, WebSockets) and only builds when the mainboard itself is an ESP32. An ESP-01/ESP-01S in this board's WiFi header runs its OWN firmware (ESP3D or BTT's) flashed separately - Marlin needs no feature enabled for it, just a spare serial port."
   },
   "rrf": {
     "supported": false,
@@ -163,5 +170,11 @@
     "asset_exclude": [],
     "docs_url": null,
     "note": null
+  },
+  "ui": {
+    "lcd": true,
+    "beeper": true,
+    "neopixel": true,
+    "z_steppers": 1
   }
 }

@@ -83,6 +83,42 @@ switch ($action) {
         json_out(['ok' => true, 'name' => basename($abs), 'data_b64' => base64_encode((string)file_get_contents($abs))]);
     }
 
+    case 'custom_list': {
+        json_out(['ok' => true, 'tunes' => array_map(
+            fn ($t) => ['name' => $t['name'], 'notes' => count($t['seq'] ?? []),
+                        'source' => $t['source'] ?? '', 'created' => $t['created'] ?? 0],
+            customtunes_all())]);
+    }
+
+    case 'custom_save': {
+        $name = (string)($body['name'] ?? '');
+        $src  = (string)($body['source'] ?? '');
+        $seq  = is_array($body['seq'] ?? null) ? $body['seq'] : [];
+        $r = customtunes_add($name, $src, $seq);
+        if (is_string($r)) {
+            json_out(['ok' => false, 'error' => $r], 422);
+        }
+        json_out(['ok' => true, 'name' => $r['name'], 'notes' => count($r['seq'])]);
+    }
+
+    case 'custom_get': {
+        $name = (string)($body['name'] ?? '');
+        foreach (customtunes_all() as $t) {
+            if (strcasecmp((string)$t['name'], $name) === 0) {
+                json_out(['ok' => true, 'name' => $t['name'], 'seq' => $t['seq']]);
+            }
+        }
+        json_out(['ok' => false, 'error' => 'Melody not found'], 404);
+    }
+
+    case 'custom_delete': {
+        $name = (string)($body['name'] ?? '');
+        if (!customtunes_delete($name)) {
+            json_out(['ok' => false, 'error' => 'Melody not found'], 404);
+        }
+        json_out(['ok' => true]);
+    }
+
     default:
         json_out(['ok' => false, 'error' => 'Unknown action'], 400);
 }

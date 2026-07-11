@@ -71,8 +71,14 @@
         "type": "mono128x64"
       },
       {
+        "id": "btt_tft_marlin_mode",
+        "label": "BTT TFT35/TFT70 (Marlin mode + touch \u2014 EXP1/EXP2 wired)",
+        "type": "marlinui_tft",
+        "define": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER"
+      },
+      {
         "id": "btt_serial_tft",
-        "label": "BTT TFT35/TFT70 (touch mode, external firmware)",
+        "label": "BTT TFT35/TFT70 (touch mode only \u2014 no Marlin menus/beeper)",
         "type": "serial_tft"
       }
     ],
@@ -158,7 +164,8 @@
   "note": "SKR E3 Turbo - E3-form-factor LPC1769 with 5 drivers.",
   "wifi": {
     "supported": false,
-    "module": null
+    "module": null,
+    "note": "Marlin's WIFISUPPORT pulls in ESP32-only libraries (ESP3DLib, AsyncTCP, WebSockets) and only builds when the mainboard itself is an ESP32. An ESP-01/ESP-01S in this board's WiFi header runs its OWN firmware (ESP3D or BTT's) flashed separately - Marlin needs no feature enabled for it, just a spare serial port."
   },
   "rrf": {
     "supported": true,
@@ -168,5 +175,11 @@
     "asset_exclude": [],
     "docs_url": "https://teamgloomy.github.io/skr_E3T_pins.html",
     "note": "TeamGloomy ships prebuilt per-board firmware; HotFetched generates config.g and fetches the matching binary."
+  },
+  "ui": {
+    "lcd": true,
+    "beeper": true,
+    "neopixel": false,
+    "z_steppers": 1
   }
 }

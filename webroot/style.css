@@ -318,3 +318,13 @@ a.btn { text-decoration: none; display: inline-block; }
 .tft-steps ol { margin: 8px 0 8px 20px; padding: 0; }
 .tft-steps li { margin: 5px 0; font-size: 13.5px; }
 .tft-steps code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+
+/* Custom melody library */
+.snd-savename { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line);
+                background: var(--bg); color: var(--fg); font-size: 13px; width: 150px; }
+.snd-mylib { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.snd-mylist { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.snd-myrow { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+             border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.snd-myname { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.snd-myrow .btn { flex: 0 0 auto; width: auto; }

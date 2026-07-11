@@ -40,38 +40,8 @@
     "screens": [
       {
         "id": "none",
-        "label": "None / headless",
+        "label": "No display",
         "type": "none"
-      },
-      {
-        "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
-        "label": "RepRap Discount Full Graphic 12864",
-        "type": "mono128x64"
-      },
-      {
-        "id": "CR10_STOCKDISPLAY",
-        "label": "Creality CR-10 stock display (12864)",
-        "type": "mono128x64"
-      },
-      {
-        "id": "MKS_MINI_12864_V3",
-        "label": "MKS Mini 12864 V3",
-        "type": "mono128x64"
-      },
-      {
-        "id": "FYSETC_MINI_12864_2_1",
-        "label": "FYSETC Mini 12864 2.1 (RGB)",
-        "type": "mono128x64"
-      },
-      {
-        "id": "BTT_MINI_12864",
-        "label": "BigTreeTech Mini 12864",
-        "type": "mono128x64"
-      },
-      {
-        "id": "btt_serial_tft",
-        "label": "BTT TFT35/TFT70 (touch mode, external firmware)",
-        "type": "serial_tft"
       }
     ],
     "probes": [
@@ -155,7 +125,8 @@
   "min_marlin": "2.1",
   "wifi": {
     "supported": false,
-    "module": null
+    "module": null,
+    "note": "Marlin's WIFISUPPORT pulls in ESP32-only libraries (ESP3DLib, AsyncTCP, WebSockets) and only builds when the mainboard itself is an ESP32. An ESP-01/ESP-01S in this board's WiFi header runs its OWN firmware (ESP3D or BTT's) flashed separately - Marlin needs no feature enabled for it, just a spare serial port."
   },
   "rrf": {
     "supported": false,
@@ -163,5 +134,12 @@
     "asset_exclude": [],
     "docs_url": null,
     "note": null
-  }
+  },
+  "ui": {
+    "lcd": false,
+    "beeper": false,
+    "neopixel": true,
+    "z_steppers": 1
+  },
+  "note": "No LCD/EXP header and no beeper on this board - displays, boot images, MMU menus and tunes are unavailable."
 }

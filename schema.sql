@@ -3,7 +3,7 @@
 CREATE TABLE IF NOT EXISTS projects (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL UNIQUE,
-    firmware     TEXT NOT NULL CHECK(firmware IN ('marlin','klipper')),
+    firmware     TEXT NOT NULL CHECK(firmware IN ('marlin','klipper','reprap')),
     board_id     TEXT NOT NULL,                  -- e.g. 'btt_skr_v3_0'
     mcu_variant  TEXT,                           -- e.g. 'STM32H743VI' | 'STM32H723VG'
     source_type  TEXT CHECK(source_type IN ('github','zip')),

@@ -16,6 +16,12 @@ $board   = board_def($project['board_id']);
 $variant = $board ? board_mcu_variant($board, (string)$project['mcu_variant']) : null;
 $fwKey   = $project['firmware']; // 'marlin' | 'klipper'
 $detect  = $project['source_detect'] !== null ? json_decode((string)$project['source_detect'], true) : null;
+
+// RepRapFirmware ships prebuilt binaries and is configured at runtime via
+// config.g, so there is no source tree to import. Its config/build panels are
+// therefore always available.
+$isRrf     = $project['firmware'] === 'reprap';
+$cfgReady  = $isRrf || $project['source_state'] === 'ready';
 ?>
 <!doctype html>
 <html lang="en">
@@ -121,7 +127,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 
     <section class="panel" id="cfgPanel">
         <h2>Configuration</h2>
-        <?php if ($project['source_state'] !== 'ready'): ?>
+        <?php if (!$cfgReady): ?>
             <p class="empty">Configuration editor unlocks once a firmware source is imported.</p>
 
         <?php else: ?>
@@ -129,6 +135,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
             <form id="cfgForm" hidden>
                 <div id="cfgGroups"></div>
 
+                <?php if (!$isRrf): ?>
                 <div id="bsBlock" hidden>
                     <h3 class="cfg-group">Boot &amp; Status Images (128&times;64 monochrome LCD)</h3>
                     <p class="empty">For 128&times;64 monochrome LCDs. Full-color images are converted to a 1-bit bitmap &mdash; that's what the hardware displays. Enable &ldquo;Show boot screen&rdquo; or &ldquo;custom status screen image&rdquo; above to use this even before selecting a display. Tune the conversion and preview live before installing.</p>
@@ -209,6 +216,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
                     <p class="empty">Paste these into your slicer/host event hooks (start G-code, pause script, error hook, end G-code). The power-on tune above is baked into the firmware; these run from the host.</p>
                     <div id="sndSnippets" class="snd-grid"></div>
                 </div>
+                <?php endif; ?>
 
                 <div class="actions">
                     <button type="submit" class="btn primary">Submit Configuration</button>
@@ -220,7 +228,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 
     <section class="panel" id="buildPanel">
         <h2>Builds</h2>
-        <?php if ($project['source_state'] !== 'ready'): ?>
+        <?php if (!$cfgReady): ?>
             <p class="empty">Import a firmware source and submit a configuration to build.</p>
         <?php else: ?>
             <div class="actions" style="margin-bottom:12px">
@@ -842,6 +850,16 @@ function sndRender() {
     applyBtn.type = 'button';
     applyBtn.className = 'btn sm primary';
     applyBtn.textContent = 'Apply';
+    // Save the parsed melody into the user's library under a name.
+    const saveName = document.createElement('input');
+    saveName.type = 'text';
+    saveName.className = 'snd-savename';
+    saveName.placeholder = 'Save as\u2026';
+    saveName.maxLength = 60;
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn sm';
+    saveBtn.textContent = 'Save to library';
     const impMsg = document.createElement('span');
     impMsg.className = 'msg';
     const parseImport = () => {
@@ -903,7 +921,101 @@ function sndRender() {
         cfgApplyVisibility();
         cfgExtrasVisibility();
     });
-    row2.append(tryBtn, applyBtn, impMsg);
+    row2.append(tryBtn, applyBtn, saveName, saveBtn, impMsg);
+
+    saveBtn.addEventListener('click', async () => {
+        const seq = parseImport();
+        if (!seq || !seq.length) { impMsg.textContent = 'Nothing to save \u2014 paste a melody first'; return; }
+        const nm = saveName.value.trim();
+        if (!nm) { impMsg.textContent = 'Give the melody a name first'; return; }
+        saveBtn.disabled = true;
+        impMsg.textContent = 'Saving\u2026';
+        try {
+            const r = await fetch('api/soundlib.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'custom_save', csrf: CSRF, name: nm,
+                                       source: ta.value.trim().slice(0, 2000), seq })
+            });
+            const j = await r.json();
+            if (j.ok) {
+                impMsg.textContent = 'Saved \u201C' + j.name + '\u201D (' + j.notes + ' notes)';
+                saveName.value = '';
+                customRefresh();
+            } else {
+                impMsg.textContent = j.error || 'Save failed';
+            }
+        } catch { impMsg.textContent = 'Save failed'; }
+        saveBtn.disabled = false;
+    });
+
+    /* ---- My melodies: the user's saved library ---- */
+    const myLib = document.createElement('div');
+    myLib.className = 'snd-mylib';
+    myLib.innerHTML = '<h3>My melodies</h3>';
+    const myList = document.createElement('div');
+    myList.className = 'snd-mylist';
+    myLib.appendChild(myList);
+
+    async function customRefresh() {
+        try {
+            const r = await fetch('api/soundlib.php', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'custom_list', csrf: CSRF })
+            });
+            const j = await r.json();
+            myList.innerHTML = '';
+            if (!j.ok || !j.tunes || !j.tunes.length) {
+                myList.innerHTML = '<p class="empty">No saved melodies yet. Paste one above and hit \u201CSave to library\u201D.</p>';
+                return;
+            }
+            for (const t of j.tunes) {
+                const row = document.createElement('div');
+                row.className = 'snd-myrow';
+                const nm = document.createElement('span');
+                nm.className = 'snd-myname';
+                nm.textContent = t.name + ' (' + t.notes + ' notes)';
+                const play = document.createElement('button');
+                play.type = 'button'; play.className = 'btn sm'; play.textContent = '\u25B6 Play';
+                const use = document.createElement('button');
+                use.type = 'button'; use.className = 'btn sm primary'; use.textContent = 'Use';
+                const del = document.createElement('button');
+                del.type = 'button'; del.className = 'btn sm'; del.textContent = 'Delete';
+
+                const load = async () => {
+                    const rr = await fetch('api/soundlib.php', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'custom_get', csrf: CSRF, name: t.name })
+                    });
+                    const jj = await rr.json();
+                    return jj.ok ? jj.seq : null;
+                };
+                play.addEventListener('click', async () => {
+                    const seq = await load();
+                    if (seq) togglePlay(play, () => seq);
+                });
+                use.addEventListener('click', async () => {
+                    const seq = await load();
+                    if (!seq) return;
+                    midiSeq = seq;
+                    ta.value = '';
+                    impMsg.textContent = 'Loaded \u201C' + t.name + '\u201D \u2014 pick a target and hit Apply';
+                });
+                del.addEventListener('click', async () => {
+                    await fetch('api/soundlib.php', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'custom_delete', csrf: CSRF, name: t.name })
+                    });
+                    customRefresh();
+                });
+                row.append(nm, play, use, del);
+                myList.appendChild(row);
+            }
+        } catch {
+            myList.innerHTML = '<p class="empty">Could not load your melodies.</p>';
+        }
+    }
+    customRefresh();
 
     // Exporters: current melody -> downloadable .mid / .rtttl / .csv
     const exRow = document.createElement('div');
@@ -1044,7 +1156,7 @@ function sndRender() {
         }
     });
 
-    imp.append(ta, fileIn, target, row2, exRow, lib);
+    imp.append(ta, fileIn, target, row2, myLib, exRow, lib);
     box.appendChild(imp);
 }
 

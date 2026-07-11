@@ -147,16 +147,30 @@ if ($project['firmware'] === 'reprap') {
     blog('Looking up the latest TeamGloomy release for this board…');
     $asset = rrf_resolve_asset($board);
     if (isset($asset['error'])) {
+        // Print what WAS published so the board's pattern can be corrected.
+        if (!empty($asset['seen'])) {
+            blog('Assets published in the checked releases:');
+            foreach ($asset['seen'] as $n) {
+                blog('   ' . $n);
+            }
+        }
         gate('s4_firmware', 'Prebuilt firmware resolved and downloaded', 20, false,
              $asset['error'] . ' — your config.g is still available below.');
         bstate('failed', $confidence, true);
         exit(0);
     }
 
-    blog('Release ' . $asset['tag'] . ' — asset ' . $asset['name'] . ' (' . number_format($asset['size']) . ' bytes)');
-    $ctx = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 180,
-                                             'header' => "User-Agent: HotFetched\r\n"]]);
-    $bin = @file_get_contents((string)$asset['url'], false, $ctx);
+    blog('Release ' . $asset['tag'] . ' — ' . $asset['name']
+         . ' (' . number_format((float)$asset['size']) . ' bytes, from ' . $asset['from'] . ')');
+
+    if (isset($asset['data'])) {
+        // Came from inside a release zip - already in memory.
+        $bin = (string)$asset['data'];
+    } else {
+        $ctx = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 180,
+                                                 'header' => "User-Agent: HotFetched\r\n"]]);
+        $bin = @file_get_contents((string)$asset['url'], false, $ctx);
+    }
     $got = ($bin !== false && strlen($bin) > 1024);
     $confidence += gate('s4_firmware', 'Prebuilt firmware resolved and downloaded', 20, $got,
         $got ? $asset['name'] : 'Could not download ' . $asset['name']);
@@ -290,7 +304,8 @@ if ($saved === []) {
 $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                       marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
                       marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
-                      marlin_field_defs_extended($board));
+                      marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
+                      marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
 [$vals, $errors] = hf_validate_fields($fields, $saved);
 
 $missing = $range = $option = [];
@@ -310,6 +325,74 @@ if (($vals['probe'] ?? 'none') !== 'none') {
         $conflicts[] = 'Probe offset exceeds bed size';
     }
 }
+// FT_MOTION is an alternative motion engine with its OWN input shapers. Running
+// it alongside INPUT_SHAPING_X/Y would shape the motion twice.
+if (($vals['ft_motion'] ?? '0') === '1'
+    && (($vals['shaping_x'] ?? '0') === '1' || ($vals['shaping_y'] ?? '0') === '1')) {
+    $conflicts[] = 'Fixed-Time Motion has its own input shapers - turn off the separate Input Shaping X/Y (or turn off FT Motion). Using both would shape the motion twice';
+}
+// Backlash compensation with all-zero distances does nothing - flag the mistake.
+if (($vals['backlash'] ?? '0') === '1'
+    && (float)($vals['backlash_x'] ?? 0) === 0.0
+    && (float)($vals['backlash_y'] ?? 0) === 0.0
+    && (float)($vals['backlash_z'] ?? 0) === 0.0) {
+    $conflicts[] = 'Backlash compensation is on but every axis distance is 0 - measure your backlash and enter it, or turn the feature off';
+}
+
+// G34 auto-align probes the bed, so it needs a probe.
+if ((string)($vals['z_align'] ?? 'none') === 'auto_align' && ($vals['probe'] ?? 'none') === 'none') {
+    $conflicts[] = 'G34 Z auto-align uses the probe to measure each Z motor - select a bed probe, or use independent Z endstops instead';
+}
+// BABYSTEP_ZPROBE_OFFSET needs a probe and is invalid with manual mesh levelling.
+if (($vals['babystep_zprobe'] ?? '0') === '1') {
+    if (($vals['probe'] ?? 'none') === 'none') {
+        $conflicts[] = 'Babystepping the probe Z-offset requires a bed probe';
+    }
+    if ((string)($vals['leveling'] ?? 'none') === 'mesh') {
+        $conflicts[] = 'Babystepping the probe Z-offset cannot be combined with Manual Mesh levelling';
+    }
+}
+
+// MMU_MENUS and STARTUP_TUNE both need a MarlinUI display: the menus need
+// HAS_MARLINUI_MENU, and BEEPER_PIN lives on the LCD's EXP header. An
+// external-firmware TFT (BTT touch mode) or no display provides neither.
+$uiPresent = marlin_screen_has_marlinui($board, (string)($vals['screen'] ?? ''));
+if (!$uiPresent) {
+    if (($vals['mmu_menus'] ?? '0') === '1') {
+        $conflicts[] = 'The MMU LCD menu needs a MarlinUI display - your selected screen runs its own firmware (or none), so Marlin has no menu to add it to. Untick it, or pick a Marlin-native LCD';
+    }
+    $st = (string)($vals['startup_tune'] ?? 'keep');
+    if ($st !== 'keep' && $st !== 'silent') {
+        $conflicts[] = 'A power-on tune needs a beeper on the LCD EXP header - your selected screen provides none. Set the power-on tune to "Keep current" or "Silent", or pick a Marlin-native LCD';
+    }
+} elseif (($vals['speaker'] ?? '0') !== '1') {
+    $st = (string)($vals['startup_tune'] ?? 'keep');
+    if ($st !== 'keep' && $st !== 'silent') {
+        $conflicts[] = 'A power-on tune requires SPEAKER to be enabled - tick "Speaker fitted", or set the tune to "Keep current"/"Silent"';
+    }
+}
+
+// Without an MMU, each extruder needs a real E driver slot on the board.
+// (With an MMU the extra "extruders" are logical tools driven by one E motor.)
+$mmuSel = (string)($vals['mmu_model'] ?? 'none');
+$mmuMulti = in_array($mmuSel, ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3',
+                               'EXTENDABLE_EMU_MMU2', 'EXTENDABLE_EMU_MMU2S'], true);
+$eSlotCount = count(array_filter($board['marlin']['driver_slots'] ?? [],
+                                 fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
+$nExtSel = (int)($vals['extruders'] ?? 1);
+if (!$mmuMulti && $eSlotCount > 0 && $nExtSel > $eSlotCount) {
+    $conflicts[] = "This board has only {$eSlotCount} E driver slot(s), so it cannot drive {$nExtSel} extruders - reduce the count, or use a multi-material unit (which drives many tools from one E motor)";
+}
+
+// Prusa MMU2S/MMU3 are 5-port units: Marlin requires EXTRUDERS = 5 exactly.
+$mmu = (string)($vals['mmu_model'] ?? 'none');
+if (marlin_mmu_needs_5($mmu) && (int)($vals['extruders'] ?? 1) !== 5) {
+    $conflicts[] = "{$mmu} is a 5-port unit and requires exactly 5 extruders - set Extruders to 5";
+}
+if ($mmu !== 'none' && $mmu !== 'PRUSA_MMU1' && (int)($vals['extruders'] ?? 1) < 2) {
+    $conflicts[] = 'A multi-material unit needs more than one extruder - raise the Extruders count';
+}
+
 // TEMP_SENSOR_0 = 0 means "not used" in Marlin -> HOTENDS becomes 0, and every
 // hotend function (wait_for_hotend, setTargetHotend, TEMP_WINDOW...) disappears.
 // Anything needing a hotend then fails deep in the compile, so catch it here.
@@ -329,8 +412,8 @@ if ($lvl === 'ubl' && ($vals['eeprom'] ?? '0') !== '1') {
     // Auto-enabled on apply, but surface it so the user knows why EEPROM turned on.
     blog('Note: UBL requires EEPROM_SETTINGS - enabling it automatically.');
 }
-if (($saved['singlenozzle'] ?? '0') === '1' && ($vals['extruders'] ?? '1') !== '2') {
-    $conflicts[] = 'SINGLENOZZLE requires 2 extruders';
+if (($vals['singlenozzle'] ?? '0') === '1' && (int)($vals['extruders'] ?? 1) < 2) {
+    $conflicts[] = 'SINGLENOZZLE requires 2 or more extruders';
 }
 if ((int)($vals['homing_xy'] ?? 0) > (int)($vals['feed_x'] ?? PHP_INT_MAX)) {
     $conflicts[] = 'Homing XY speed exceeds max feedrate X';
@@ -394,6 +477,34 @@ $minMarlin = (string)($board['min_marlin'] ?? '');
 $verHint = $minMarlin !== '' ? "Marlin {$minMarlin}+ (or bugfix-2.1.x)" : 'a newer Marlin (2.1.2+ / bugfix-2.1.x)';
 $treeDetail = $treeHasBoard ? '' : $expectedMb . " is not defined in this Marlin source. This board needs {$verHint}. Import a matching source via Replace source, or pick a board this tree supports.";
 $confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin version', 5, $treeHasBoard, $treeDetail);
+
+/* The selected MMU model must exist in the IMPORTED tree. Marlin resolves it by
+   token-pasting (_MMU = CAT(_, MMU_MODEL)); if the tree predates the model, the
+   symbol is undefined, silently evaluates to 0, and E_STEPPERS falls back to
+   EXTRUDERS - producing bogus "E2_STEP_PIN not defined" errors instead of an
+   honest "unsupported" message. PRUSA_MMU3 landed in Marlin 2.1.3 / bugfix-2.1.x. */
+$mmuPick = (string)($vals['mmu_model'] ?? 'none');
+if ($mmuPick !== 'none') {
+    $condPath = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '')
+              . '/Marlin/src/inc/Conditionals-1-axes.h';
+    $condTxt  = @file_get_contents($condPath);
+    if ($condTxt === false) {
+        // Older trees keep this in Conditionals_post.h
+        $condTxt = (string)@file_get_contents(
+            $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '')
+            . '/Marlin/src/inc/Conditionals_post.h');
+    }
+    $mmuKnown = $condTxt !== '' && str_contains((string)$condTxt, '_' . $mmuPick . ' ');
+    $mmuDetail = $mmuKnown
+        ? ''
+        : "The imported Marlin version does not know {$mmuPick}. "
+          . ($mmuPick === 'PRUSA_MMU3'
+             ? 'MMU3 needs Marlin 2.1.3 or newer - re-import using the bugfix-2.1.x branch.'
+             : 'Import a newer Marlin, or pick an MMU model this version supports.');
+    $confidence += gate('s2_mmu', 'MMU model is supported by the imported Marlin version', 5, $mmuKnown, $mmuDetail);
+} else {
+    $confidence += gate('s2_mmu', 'MMU model is supported by the imported Marlin version', 5, true, 'No MMU selected');
+}
 
 if ($confidence < 60) {
     bstate('failed', $confidence, true);
