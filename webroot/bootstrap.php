@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.9.0';
+const HF_VERSION = '2.9.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -658,7 +658,7 @@ function marlin_field_defs(array $board): array
          'override_key' => 'thermal_override', 'override_max' => 999],
         ['key' => 'bed_maxtemp',    'label' => 'Bed max temp (°C)',    'group' => 'Thermal', 'type' => 'int', 'min' => 60,  'max' => (int)$lim['max_bed_temp'],
          'override_key' => 'thermal_override', 'override_max' => 300],
-        ['key' => 'temp_sensor_0',   'label' => 'Hotend temp sensor (TEMP_SENSOR_0)',  'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
+        ['key' => 'temp_sensor_0',   'label' => 'Hotend temp sensor (TEMP_SENSOR_0)',  'group' => 'Thermal', 'type' => 'int', 'min' => 1, 'max' => 1000],
         ['key' => 'temp_sensor_bed', 'label' => 'Bed temp sensor (TEMP_SENSOR_BED)',   'group' => 'Thermal', 'type' => 'int', 'min' => -100, 'max' => 10000],
     ];
 }

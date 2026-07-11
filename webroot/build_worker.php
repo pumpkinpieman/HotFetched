@@ -310,6 +310,15 @@ if (($vals['probe'] ?? 'none') !== 'none') {
         $conflicts[] = 'Probe offset exceeds bed size';
     }
 }
+// TEMP_SENSOR_0 = 0 means "not used" in Marlin -> HOTENDS becomes 0, and every
+// hotend function (wait_for_hotend, setTargetHotend, TEMP_WINDOW...) disappears.
+// Anything needing a hotend then fails deep in the compile, so catch it here.
+$ts0 = (int)($vals['temp_sensor_0'] ?? 1);
+$exs = (int)($vals['extruders'] ?? 1);
+if ($ts0 === 0 && $exs >= 1) {
+    $conflicts[] = 'Hotend temp sensor (TEMP_SENSOR_0) is 0, which means "no sensor" - Marlin then builds with zero hotends and features like filament runout, PID and linear advance cannot compile. Set a real sensor type (1 = generic 100k thermistor).';
+}
+
 // Probe-based leveling needs an actual probe. We can't infer the user's hardware,
 // so fail fast here rather than letting the compiler do it 90 seconds later.
 $lvl = (string)($vals['leveling'] ?? 'none');
