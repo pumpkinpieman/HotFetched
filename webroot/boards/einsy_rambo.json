@@ -12,7 +12,8 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": false
   },
   "marlin": {
     "motherboard": "BOARD_EINSY_RAMBO",
@@ -156,5 +157,12 @@
   "wifi": {
     "supported": false,
     "module": null
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": null
   }
 }

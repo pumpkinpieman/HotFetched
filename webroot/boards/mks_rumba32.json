@@ -13,7 +13,8 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": false
   },
   "marlin": {
     "motherboard": "BOARD_RUMBA32_MKS",
@@ -160,5 +161,12 @@
   "wifi": {
     "supported": false,
     "module": null
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": null
   }
 }

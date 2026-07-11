@@ -13,7 +13,8 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": true
   },
   "marlin": {
     "motherboard": "BOARD_BTT_SKR_E3_TURBO",
@@ -158,5 +159,14 @@
   "wifi": {
     "supported": false,
     "module": null
+  },
+  "rrf": {
+    "supported": true,
+    "asset_include": [
+      "e3turbo"
+    ],
+    "asset_exclude": [],
+    "docs_url": "https://teamgloomy.github.io/skr_E3T_pins.html",
+    "note": "TeamGloomy ships prebuilt per-board firmware; HotFetched generates config.g and fetches the matching binary."
   }
 }

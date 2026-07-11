@@ -27,8 +27,8 @@ switch ($action) {
         if (!valid_project_name($name)) {
             json_out(['ok' => false, 'error' => 'Invalid project name (1-64 chars: letters, digits, space, . _ -)'], 422);
         }
-        if (!in_array($firmware, ['marlin', 'klipper'], true)) {
-            json_out(['ok' => false, 'error' => 'Firmware must be marlin or klipper'], 422);
+        if (!in_array($firmware, ['marlin', 'klipper', 'reprap'], true)) {
+            json_out(['ok' => false, 'error' => 'Firmware must be marlin, klipper or reprap'], 422);
         }
         $board = board_def($boardId);
         if ($board !== null && !board_supports($board, $firmware)) {

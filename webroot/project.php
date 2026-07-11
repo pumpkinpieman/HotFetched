@@ -52,7 +52,7 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
         </div>
     </section>
 
-    <section class="panel" id="srcPanel">
+    <section class="panel" id="srcPanel"<?= $project['firmware'] === 'reprap' ? ' hidden' : '' ?>>
         <h2>Firmware Source</h2>
 
         <div class="kv" style="margin-bottom:14px">

@@ -13,7 +13,8 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": true
   },
   "marlin": {
     "motherboard": "BOARD_MELLOW_FLY_E3_V2",
@@ -158,5 +159,16 @@
   "wifi": {
     "supported": true,
     "module": "ESP-01S / ESP32 WiFi-101 (SPI header)"
+  },
+  "rrf": {
+    "supported": true,
+    "asset_include": [
+      "fly",
+      "e3",
+      "v2"
+    ],
+    "asset_exclude": [],
+    "docs_url": "https://teamgloomy.github.io/fly_e3_v2_general_3_5.html",
+    "note": "TeamGloomy ships prebuilt per-board firmware; HotFetched generates config.g and fetches the matching binary."
   }
 }

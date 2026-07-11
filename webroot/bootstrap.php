@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.8.0';
+const HF_VERSION = '2.9.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1400,6 +1400,320 @@ function marlin_apply_values_wifi(array &$adv, array $v, array $board): array
     $set('OTASUPPORT', null, $wifi && ($v['wifi_ota'] ?? '0') === '1');
 
     return $applied;
+}
+
+
+/* ------------------------------------------------- RepRapFirmware (RRF) */
+
+const RRF_RELEASES_API = 'https://api.github.com/repos/gloomyandy/RepRapFirmware/releases';
+
+function board_supports_rrf(array $board): bool
+{
+    return (bool)($board['rrf']['supported'] ?? false);
+}
+
+/** RRF config fields. Same machine data as Marlin/Klipper, emitted as G-code. */
+function rrf_field_defs(array $board): array
+{
+    $lim  = $board['limits'] ?? [];
+    $lmax = fn (string $k, int $d): int => (($v = (int)($lim[$k] ?? 0)) > 0 ? $v : $d);
+    $slots = $board['marlin']['driver_slots'] ?? ['X', 'Y', 'Z', 'E0'];
+
+    $f = [
+        ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine', 'type' => 'text', 'max_len' => 40],
+        ['key' => 'kinematics', 'label' => 'Kinematics', 'group' => 'Machine', 'type' => 'select',
+         'options' => ['cartesian', 'corexy'],
+         'option_labels' => ['cartesian' => 'Cartesian', 'corexy' => 'CoreXY']],
+        ['key' => 'network', 'label' => 'Connectivity', 'group' => 'Machine', 'type' => 'select',
+         'options' => ['wifi', 'sbc', 'usb'],
+         'option_labels' => ['wifi' => 'WiFi (ESP module)', 'sbc' => 'SBC (Raspberry Pi)', 'usb' => 'USB / serial only']],
+
+        ['key' => 'bed_x', 'label' => 'X travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_bed_x', 500)],
+        ['key' => 'bed_y', 'label' => 'Y travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_bed_y', 500)],
+        ['key' => 'z_max', 'label' => 'Z height (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_z', 600)],
+
+        ['key' => 'max_velocity', 'label' => 'Max speed XY (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 20, 'max' => $lmax('max_feedrate_xy', 800)],
+        ['key' => 'max_accel', 'label' => 'Max acceleration (mm/s2)', 'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 20000],
+    ];
+
+    // Per-axis steps + current, matching the board's real driver slots.
+    foreach ($slots as $s) {
+        $ax = strtolower($s);
+        $f[] = ['key' => "steps_{$ax}", 'label' => "Steps/mm {$s}", 'group' => 'Motion',
+                'type' => 'float', 'min' => 1, 'max' => 6400];
+        $f[] = ['key' => "current_{$ax}", 'label' => "{$s} motor current (mA)", 'group' => 'Stepper Drivers',
+                'type' => 'int', 'min' => 100, 'max' => 2000];
+        $f[] = ['key' => "invert_{$ax}", 'label' => "Invert {$s} direction", 'group' => 'Motion', 'type' => 'bool'];
+    }
+
+    $f[] = ['key' => 'microsteps', 'label' => 'Microsteps (with interpolation)', 'group' => 'Stepper Drivers',
+            'type' => 'select', 'options' => ['16', '32', '64', '128', '256'],
+            'option_labels' => ['16' => '16', '32' => '32', '64' => '64', '128' => '128', '256' => '256']];
+
+    $f[] = ['key' => 'hotend_max', 'label' => 'Hotend max temp (C)', 'group' => 'Thermal', 'type' => 'int',
+            'min' => 150, 'max' => $lmax('max_hotend_temp', 300)];
+    $f[] = ['key' => 'bed_max', 'label' => 'Bed max temp (C)', 'group' => 'Thermal', 'type' => 'int',
+            'min' => 60, 'max' => $lmax('max_bed_temp', 120)];
+
+    $f[] = ['key' => 'probe', 'label' => 'Bed probe', 'group' => 'Probe', 'type' => 'select',
+            'options' => ['none', 'bltouch', 'switch'],
+            'option_labels' => ['none' => 'None', 'bltouch' => 'BLTouch / MicroProbe', 'switch' => 'Simple switch (Z-min)']];
+    $f[] = ['key' => 'probe_off_x', 'label' => 'Probe offset X (mm)', 'group' => 'Probe', 'type' => 'float',
+            'min' => -100, 'max' => 100, 'requires' => ['probe' => ['bltouch', 'switch']]];
+    $f[] = ['key' => 'probe_off_y', 'label' => 'Probe offset Y (mm)', 'group' => 'Probe', 'type' => 'float',
+            'min' => -100, 'max' => 100, 'requires' => ['probe' => ['bltouch', 'switch']]];
+    $f[] = ['key' => 'mesh_points', 'label' => 'Mesh grid points per axis', 'group' => 'Probe', 'type' => 'int',
+            'min' => 3, 'max' => 15, 'requires' => ['probe' => ['bltouch', 'switch']]];
+
+    return $f;
+}
+
+/** Sensible defaults for a fresh RRF project (there is no file to import from). */
+function rrf_default_values(array $board): array
+{
+    $slots = $board['marlin']['driver_slots'] ?? ['X', 'Y', 'Z', 'E0'];
+    $v = [
+        'machine_name' => 'My Printer', 'kinematics' => 'corexy', 'network' => 'wifi',
+        'bed_x' => '200', 'bed_y' => '200', 'z_max' => '200',
+        'max_velocity' => '300', 'max_accel' => '3000',
+        'microsteps' => '16', 'hotend_max' => '280', 'bed_max' => '100',
+        'probe' => 'none', 'probe_off_x' => '0', 'probe_off_y' => '0', 'mesh_points' => '5',
+    ];
+    foreach ($slots as $s) {
+        $ax = strtolower($s);
+        $v["steps_{$ax}"]   = str_starts_with($ax, 'e') ? '420' : (str_starts_with($ax, 'z') ? '400' : '80');
+        $v["current_{$ax}"] = str_starts_with($ax, 'e') ? '650' : '800';
+        $v["invert_{$ax}"]  = '0';
+    }
+    return $v;
+}
+
+/**
+ * Generate a RepRapFirmware config.g from the collected values.
+ * RRF is configured at runtime by G-code, so this file IS the configuration —
+ * there is nothing to compile.
+ */
+function rrf_configg_generate(array $board, array $v): string
+{
+    $slots = $board['marlin']['driver_slots'] ?? ['X', 'Y', 'Z', 'E0'];
+    $name  = str_replace('"', "'", (string)($v['machine_name'] ?? 'My Printer'));
+    $micro = (int)($v['microsteps'] ?? 16);
+
+    // Map our slot names onto RRF drive numbers (0=X, 1=Y, 2=Z, 3+=extruders).
+    $driveOf = [];
+    $eIndex  = 3;
+    foreach ($slots as $s) {
+        $u = strtoupper($s);
+        if ($u === 'X')      { $driveOf[$s] = 0; }
+        elseif ($u === 'Y')  { $driveOf[$s] = 1; }
+        elseif ($u === 'Z')  { $driveOf[$s] = 2; }
+        elseif ($u === 'Z2') { $driveOf[$s] = 2; } // second Z shares the Z axis
+        else                 { $driveOf[$s] = $eIndex++; }
+    }
+
+    $L   = [];
+    $L[] = '; config.g - generated by HotFetched';
+    $L[] = '; Board: ' . $board['name'];
+    $L[] = '; RepRapFirmware is configured at runtime - this file IS the config.';
+    $L[] = '';
+    $L[] = '; --- General';
+    $L[] = 'G90                                  ; absolute coordinates';
+    $L[] = 'M83                                  ; relative extruder moves';
+    $L[] = 'M550 P"' . $name . '"                ; machine name';
+    $L[] = '';
+
+    $L[] = '; --- Network';
+    $net = (string)($v['network'] ?? 'usb');
+    if ($net === 'wifi') {
+        $L[] = 'M552 S1                              ; enable WiFi';
+        $L[] = '; Run M587 S"ssid" P"password" ONCE from the console to store your network.';
+    } elseif ($net === 'sbc') {
+        $L[] = '; SBC mode - networking is handled by the Pi (DSF).';
+    } else {
+        $L[] = 'M552 S0                              ; networking off (USB only)';
+    }
+    $L[] = '';
+
+    $L[] = '; --- Kinematics';
+    $L[] = ((string)($v['kinematics'] ?? 'cartesian') === 'corexy')
+         ? 'M669 K1                              ; CoreXY'
+         : 'M669 K0                              ; Cartesian';
+    $L[] = '';
+
+    $L[] = '; --- Drives';
+    foreach ($slots as $s) {
+        $ax  = strtolower($s);
+        $d   = $driveOf[$s];
+        $dir = ((string)($v["invert_{$ax}"] ?? '0') === '1') ? 'S0' : 'S1';
+        $L[] = sprintf('M569 P%d %s                          ; drive %d (%s) direction', $d, $dir, $d, $s);
+    }
+    $L[] = '';
+
+    // M92 / M906 take axis letters, so group by axis.
+    $steps = [];
+    $curr  = [];
+    foreach ($slots as $s) {
+        $ax = strtolower($s);
+        $u  = strtoupper($s);
+        $letter = in_array($u, ['X', 'Y', 'Z', 'Z2'], true) ? substr($u, 0, 1) : 'E';
+        $sv = $v["steps_{$ax}"] ?? null;
+        $cv = $v["current_{$ax}"] ?? null;
+        if ($sv !== null && !isset($steps[$letter])) {
+            $steps[$letter] = rtrim(rtrim(sprintf('%.3f', (float)$sv), '0'), '.');
+        }
+        if ($cv !== null) {
+            if ($letter === 'E') { $curr['E'][] = (int)$cv; }
+            elseif (!isset($curr[$letter])) { $curr[$letter] = (int)$cv; }
+        }
+    }
+    $m92 = '';
+    foreach (['X', 'Y', 'Z'] as $l) {
+        if (isset($steps[$l])) { $m92 .= $l . $steps[$l] . ' '; }
+    }
+    if (isset($steps['E'])) { $m92 .= 'E' . $steps['E'] . ' '; }
+    $L[] = 'M92 ' . trim($m92) . '                 ; steps per mm';
+    $L[] = 'M350 X' . $micro . ' Y' . $micro . ' Z' . $micro . ' E' . $micro . ' I1        ; microstepping with interpolation';
+
+    $m906 = '';
+    foreach (['X', 'Y', 'Z'] as $l) {
+        if (isset($curr[$l])) { $m906 .= $l . (int)$curr[$l] . ' '; }
+    }
+    if (!empty($curr['E'])) { $m906 .= 'E' . implode(':', $curr['E']) . ' '; }
+    $L[] = 'M906 ' . trim($m906) . 'I30            ; motor currents (mA), 30% idle';
+    $L[] = 'M84 S30                              ; idle timeout';
+    $L[] = '';
+
+    $L[] = '; --- Axis limits';
+    $L[] = 'M208 X0 Y0 Z0 S1                     ; minima';
+    $L[] = sprintf('M208 X%d Y%d Z%d S0                ; maxima',
+                   (int)($v['bed_x'] ?? 200), (int)($v['bed_y'] ?? 200), (int)($v['z_max'] ?? 200));
+    $L[] = '';
+
+    $L[] = '; --- Speeds';
+    $vel = (int)($v['max_velocity'] ?? 300) * 60; // RRF wants mm/min
+    $acc = (int)($v['max_accel'] ?? 3000);
+    $L[] = sprintf('M203 X%d Y%d Z%d E%d          ; max speeds (mm/min)', $vel, $vel, (int)($vel / 10), $vel);
+    $L[] = sprintf('M201 X%d Y%d Z%d E%d              ; accelerations (mm/s^2)', $acc, $acc, (int)($acc / 10), $acc);
+    $L[] = 'M566 X400 Y400 Z20 E400              ; max instantaneous speed changes (jerk, mm/min)';
+    $L[] = '';
+
+    $L[] = '; --- Endstops';
+    $L[] = 'M574 X1 S1 P"xstop"                  ; X min';
+    $L[] = 'M574 Y1 S1 P"ystop"                  ; Y min';
+    $probe = (string)($v['probe'] ?? 'none');
+    $L[] = ($probe === 'none')
+         ? 'M574 Z1 S1 P"zstop"                  ; Z min switch'
+         : 'M574 Z1 S2                           ; Z homed by the probe';
+    $L[] = '';
+
+    $L[] = '; --- Heaters';
+    $L[] = 'M308 S0 P"bedtemp" Y"thermistor" T100000 B4138   ; bed sensor';
+    $L[] = 'M950 H0 C"bed" T0                    ; bed heater';
+    $L[] = 'M140 H0                              ; map heated bed';
+    $L[] = sprintf('M143 H0 S%d                          ; bed max temp', (int)($v['bed_max'] ?? 100));
+    $L[] = 'M308 S1 P"e0temp" Y"thermistor" T100000 B4138   ; hotend sensor';
+    $L[] = 'M950 H1 C"e0heat" T1                 ; hotend heater';
+    $L[] = sprintf('M143 H1 S%d                          ; hotend max temp', (int)($v['hotend_max'] ?? 280));
+    $L[] = '';
+
+    $L[] = '; --- Fans';
+    $L[] = 'M950 F0 C"fan0"                      ; part cooling fan';
+    $L[] = 'M106 P0 S0 H-1                       ; fan off, not thermostatic';
+    $L[] = 'M950 F1 C"fan1"                      ; hotend fan';
+    $L[] = 'M106 P1 S1 H1 T45                    ; thermostatic on hotend';
+    $L[] = '';
+
+    $L[] = '; --- Tools';
+    $L[] = 'M563 P0 D0 H1 F0                     ; tool 0';
+    $L[] = 'G10 P0 X0 Y0 Z0 R0 S0                ; tool offsets & temps';
+    $L[] = '';
+
+    if ($probe !== 'none') {
+        $L[] = '; --- Probe';
+        if ($probe === 'bltouch') {
+            $L[] = 'M950 S0 C"probe.servo"               ; BLTouch servo pin';
+            $L[] = 'M558 P9 C"^probe.in" H5 F120 T6000   ; BLTouch, dive 5mm';
+        } else {
+            $L[] = 'M558 P5 C"^probe.in" H5 F120 T6000   ; switch probe, dive 5mm';
+        }
+        $L[] = sprintf('G31 P500 X%s Y%s Z2.0                ; probe offsets - CALIBRATE Z YOURSELF',
+                       rtrim(rtrim(sprintf('%.2f', (float)($v['probe_off_x'] ?? 0)), '0'), '.') ?: '0',
+                       rtrim(rtrim(sprintf('%.2f', (float)($v['probe_off_y'] ?? 0)), '0'), '.') ?: '0');
+        $pts  = max(3, min(15, (int)($v['mesh_points'] ?? 5)));
+        $spX  = max(1, (int)(((int)($v['bed_x'] ?? 200) - 40) / max(1, $pts - 1)));
+        $spY  = max(1, (int)(((int)($v['bed_y'] ?? 200) - 40) / max(1, $pts - 1)));
+        $L[]  = sprintf('M557 X20:%d Y20:%d S%d:%d           ; mesh grid (%dx%d)',
+                        (int)($v['bed_x'] ?? 200) - 20, (int)($v['bed_y'] ?? 200) - 20, $spX, $spY, $pts, $pts);
+        $L[]  = '';
+        $L[]  = '; NOTE: G31 Z is the trigger height. Measure it on YOUR machine';
+        $L[]  = '; before printing - the value above is a placeholder, not a real offset.';
+        $L[]  = '';
+    }
+
+    $L[] = '; --- Pin names above (e.g. "xstop", "e0heat") follow this board\'s RRF';
+    $L[] = '; pin table. Check the TeamGloomy page for this board if a pin is rejected.';
+    $L[] = '';
+
+    return implode("\n", $L) . "\n";
+}
+
+/**
+ * Ask GitHub for TeamGloomy's releases and pick the asset matching this board.
+ * Done at build time (not baked in) so we track whatever they actually ship.
+ * Returns ['tag'=>, 'name'=>, 'url'=>, 'size'=>] | ['error'=>...]
+ */
+function rrf_resolve_asset(array $board, bool $allowPrerelease = false): array
+{
+    $inc = array_map('strtolower', (array)($board['rrf']['asset_include'] ?? []));
+    $exc = array_map('strtolower', (array)($board['rrf']['asset_exclude'] ?? []));
+    if ($inc === []) {
+        return ['error' => 'No RRF asset pattern for this board'];
+    }
+
+    $ctx = stream_context_create(['http' => [
+        'method'  => 'GET',
+        'timeout' => 20,
+        'header'  => "User-Agent: HotFetched\r\nAccept: application/vnd.github+json\r\n",
+    ]]);
+    $raw = @file_get_contents(RRF_RELEASES_API . '?per_page=10', false, $ctx);
+    if ($raw === false) {
+        return ['error' => 'Could not reach the TeamGloomy release API (no network?)'];
+    }
+    $rels = json_decode($raw, true);
+    if (!is_array($rels)) {
+        return ['error' => 'Unexpected response from the release API'];
+    }
+
+    foreach ($rels as $rel) {
+        if (!$allowPrerelease && !empty($rel['prerelease'])) {
+            continue;
+        }
+        $matches = [];
+        foreach (($rel['assets'] ?? []) as $a) {
+            $n = strtolower((string)($a['name'] ?? ''));
+            if (!str_ends_with($n, '.bin') && !str_ends_with($n, '.uf2')) {
+                continue;
+            }
+            foreach ($inc as $t) {
+                if (!str_contains($n, $t)) { continue 2; }
+            }
+            foreach ($exc as $t) {
+                if (str_contains($n, $t)) { continue 2; }
+            }
+            $matches[] = $a;
+        }
+        if (count($matches) === 1) {
+            $a = $matches[0];
+            return ['tag' => (string)$rel['tag_name'], 'name' => (string)$a['name'],
+                    'url' => (string)$a['browser_download_url'], 'size' => (int)($a['size'] ?? 0)];
+        }
+        if (count($matches) > 1) {
+            $names = array_map(fn ($a) => (string)$a['name'], $matches);
+            return ['error' => 'Several firmware files match this board (' . implode(', ', $names)
+                             . ') - pick the right one manually from the release page.'];
+        }
+    }
+    return ['error' => 'No firmware asset found for this board in the latest releases'];
 }
 
 /* ------------------------------------------------- Bootscreen generator */

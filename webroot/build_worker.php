@@ -97,6 +97,91 @@ blog('Build #' . $buildId . ' — ' . $project['name'] . ' (' . $project['firmwa
 
 /* --------------------------------------------------- Klipper pipeline */
 
+if ($project['firmware'] === 'reprap') {
+    /* ---------------------------------------- RepRapFirmware: no compile.
+       RRF is configured at runtime by config.g, and TeamGloomy ships prebuilt
+       per-board binaries. The "build" is: validate -> generate config.g ->
+       resolve and fetch the matching firmware asset. */
+    $confidence = 0;
+
+    $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
+    $stmt->execute([(int)$project['id']]);
+    $saved = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $saved[$r['field_key']] = $r['field_value'];
+    }
+    if ($saved === []) {
+        gate('s1_valid', 'Configuration submitted and valid', 40, false, 'No configuration saved — submit the Configuration form first');
+        bstate('failed', 0, true);
+        exit(0);
+    }
+
+    $fields = rrf_field_defs($board);
+    [$vals, $errors] = hf_validate_fields($fields, $saved);
+    $detail = $errors === [] ? '' : implode('; ', array_map(
+        fn ($k, $m) => "{$k}: {$m}", array_keys($errors), array_values($errors)));
+    $confidence += gate('s1_valid', 'Configuration values valid and within limits', 40, $errors === [], $detail);
+    if ($errors !== []) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    $ok = board_supports_rrf($board);
+    $confidence += gate('s2_board', 'Board is supported by RepRapFirmware', 20, $ok,
+        $ok ? '' : (string)($board['rrf']['note'] ?? 'TeamGloomy does not publish an RRF build for this board.'));
+    if (!$ok) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    $cfg     = rrf_configg_generate($board, $vals);
+    $cfgPath = $buildDir . '/config.g';
+    $wrote   = @file_put_contents($cfgPath, $cfg) !== false;
+    $confidence += gate('s3_configg', 'config.g generated', 20, $wrote,
+        $wrote ? strlen($cfg) . ' bytes' : 'Could not write config.g');
+    if (!$wrote) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    blog('Looking up the latest TeamGloomy release for this board…');
+    $asset = rrf_resolve_asset($board);
+    if (isset($asset['error'])) {
+        gate('s4_firmware', 'Prebuilt firmware resolved and downloaded', 20, false,
+             $asset['error'] . ' — your config.g is still available below.');
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    blog('Release ' . $asset['tag'] . ' — asset ' . $asset['name'] . ' (' . number_format($asset['size']) . ' bytes)');
+    $ctx = stream_context_create(['http' => ['method' => 'GET', 'timeout' => 180,
+                                             'header' => "User-Agent: HotFetched\r\n"]]);
+    $bin = @file_get_contents((string)$asset['url'], false, $ctx);
+    $got = ($bin !== false && strlen($bin) > 1024);
+    $confidence += gate('s4_firmware', 'Prebuilt firmware resolved and downloaded', 20, $got,
+        $got ? $asset['name'] : 'Could not download ' . $asset['name']);
+    if (!$got) {
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+
+    $fwPath = $buildDir . '/firmware.bin';
+    @file_put_contents($fwPath, $bin);
+    db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')->execute([$fwPath, $buildId]);
+    blog('firmware.bin: ' . number_format(strlen($bin)) . ' bytes (RRF ' . $asset['tag'] . ')');
+
+    $zip = new ZipArchive();
+    if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+        $zip->addFile($cfgPath, 'sys/config.g');
+        $zip->addFile($fwPath, 'firmware.bin');
+        $zip->close();
+    }
+
+    blog('Flash: copy firmware.bin to the SD card root, and config.g into /sys on the same card, then power-cycle.');
+    bstate('success', $confidence, true);
+    exit(0);
+}
+
 if ($project['firmware'] === 'klipper') {
     $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
     $stmt->execute([(int)$project['id']]);

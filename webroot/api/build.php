@@ -80,7 +80,8 @@ switch ($action) {
         if ($p === null) {
             json_out(['ok' => false, 'error' => 'Project not found'], 404);
         }
-        if ($p['source_state'] !== 'ready') {
+        // RRF has no source tree to import — its firmware is prebuilt upstream.
+        if ($p['firmware'] !== 'reprap' && $p['source_state'] !== 'ready') {
             json_out(['ok' => false, 'error' => 'Import a firmware source first'], 409);
         }
         $stmt = db()->prepare("SELECT COUNT(*) AS c FROM builds WHERE project_id = ? AND status IN ('queued','validating','building')");
@@ -140,7 +141,10 @@ switch ($action) {
         if ($proj !== null) {
             $bd = board_def((string)$proj['board_id']);
             if ($bd !== null) {
-                if ($proj['firmware'] === 'klipper' && isset($bd['klipper'])) {
+                if ($proj['firmware'] === 'reprap') {
+                    $flashNote = 'Copy firmware.bin to the SD card root and config.g into /sys on the same card, then power-cycle.';
+                    $artifactName = 'firmware.bin';
+                } elseif ($proj['firmware'] === 'klipper' && isset($bd['klipper'])) {
                     $flashNote = (string)($bd['klipper']['flash_note'] ?? '');
                     $artifactName = (string)($bd['klipper']['artifact'] ?? 'klipper.bin');
                 } elseif ($proj['firmware'] === 'marlin') {

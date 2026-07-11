@@ -151,11 +151,19 @@
   },
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": false
   },
   "min_marlin": "2.1.2",
   "wifi": {
     "supported": false,
     "module": null
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": null
   }
 }

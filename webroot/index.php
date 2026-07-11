@@ -43,6 +43,7 @@ $boards = board_defs();
                     <select name="firmware" id="fwSel" required>
                         <option value="marlin">Marlin</option>
                         <option value="klipper">Klipper</option>
+                        <option value="reprap">RepRapFirmware</option>
                     </select>
                 </label>
                 <label>Motherboard

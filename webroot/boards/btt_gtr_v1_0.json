@@ -13,7 +13,8 @@
   ],
   "firmware_support": {
     "marlin": true,
-    "klipper": true
+    "klipper": true,
+    "reprap": true
   },
   "marlin": {
     "motherboard": "BOARD_BTT_GTR_V1_0",
@@ -161,5 +162,14 @@
   "wifi": {
     "supported": false,
     "module": null
+  },
+  "rrf": {
+    "supported": true,
+    "asset_include": [
+      "gtr"
+    ],
+    "asset_exclude": [],
+    "docs_url": "https://teamgloomy.github.io/gtr_pins_3_5.html",
+    "note": "TeamGloomy ships prebuilt per-board firmware; HotFetched generates config.g and fetches the matching binary."
   }
 }
