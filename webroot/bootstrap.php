@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.5.2';
+const HF_VERSION = '2.5.3';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1078,6 +1078,9 @@ function marlin_apply_values_tier2_conf(array &$doc, array $v): array
     $set('FILAMENT_RUNOUT_SENSOR', $keep('FILAMENT_RUNOUT_SENSOR'), $ro);
     if ($ro) {
         $set('FIL_RUNOUT_ENABLED_DEFAULT', ($v['runout_enabled'] ?? '1') === '1' ? 'true' : 'false');
+        // Runout -> ADVANCED_PAUSE_FEATURE (in _adv.h) -> NOZZLE_PARK_FEATURE,
+        // which lives here in Configuration.h. Marlin hard-errors without it.
+        $set('NOZZLE_PARK_FEATURE', $keep('NOZZLE_PARK_FEATURE'), true);
     }
     return $applied;
 }
