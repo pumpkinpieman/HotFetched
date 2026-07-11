@@ -28,7 +28,10 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 </head>
 <body>
 <header class="topbar">
-    <h1><a href="index.php" class="home">Hot<span>Fetched</span></a></h1>
+    <a href="index.php" class="brand">
+        <img src="logo.png" alt="HotFetched" class="brand-logo">
+        <span class="brand-text">Hot<span class="accent">Fetched</span></span>
+    </a>
     <div class="sub"><?= h($project['name']) ?></div>
 </header>
 

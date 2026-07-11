@@ -58,6 +58,14 @@ with live preview.
 
 Anything under 100 shows exactly which gate failed and why.
 
+## Support
+
+HotFetched is free and self-hosted. If it saved you time or a bricked board, you can support development here:
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20HotFetched-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/bloodthirstycheeseburger90415)
+
+**https://ko-fi.com/bloodthirstycheeseburger90415**
+
 ## License
 
 MIT. Sound library: [ldrolez/free-midi-chords](https://github.com/ldrolez/free-midi-chords) (MIT).

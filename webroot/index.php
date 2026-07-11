@@ -20,8 +20,14 @@ $boards = board_defs();
 </head>
 <body>
 <header class="topbar">
-    <h1>Hot<span>Fetched</span></h1>
+    <a href="index.php" class="brand">
+        <img src="logo.png" alt="HotFetched" class="brand-logo">
+        <span class="brand-text">Hot<span class="accent">Fetched</span></span>
+    </a>
     <div class="sub">Firmware configuration &amp; build workshop</div>
+    <a class="kofi-btn" href="https://ko-fi.com/bloodthirstycheeseburger90415" target="_blank" rel="noopener noreferrer">
+        <span class="kofi-heart">&#9829;</span> Support on Ko-fi
+    </a>
 </header>
 
 <main class="wrap">
