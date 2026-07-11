@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.5.3';
+const HF_VERSION = '2.6.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1112,6 +1112,226 @@ function marlin_apply_values_tier2_adv(array &$adv, array $v): array
         $set('ADVANCED_PAUSE_FEATURE', $keep('ADVANCED_PAUSE_FEATURE'), true);
         $set('EMERGENCY_PARSER', $keep('EMERGENCY_PARSER'), true);
     }
+    return $applied;
+}
+
+
+/* ------------------------------------------------ Tier 3: bed leveling */
+
+/** Find the first line index matching $regex at or after $from. Null if absent. */
+function marlin_find_line(array $doc, string $regex, int $from = 0): ?int
+{
+    $n = count($doc['lines']);
+    for ($i = $from; $i < $n; $i++) {
+        if (preg_match($regex, (string)$doc['lines'][$i])) {
+            return $i;
+        }
+    }
+    return null;
+}
+
+/**
+ * Set a #define that occurs INSIDE a specific line range. Marlin declares
+ * GRID_MAX_POINTS_X / MESH_INSET separately inside each leveling block
+ * (LINEAR|BILINEAR, UBL, MESH), so a key-indexed set would hit the wrong one.
+ */
+function marlin_config_set_range(array &$doc, string $key, ?string $value, bool $enable, int $from, int $to): bool
+{
+    $pat = '#^(\s*)(//)?\s*\#define\s+' . preg_quote($key, '#') . '(\s+(.*))?$#';
+    for ($i = $from; $i <= $to && $i < count($doc['lines']); $i++) {
+        $line = (string)$doc['lines'][$i];
+        if (!preg_match($pat, $line, $m)) {
+            continue;
+        }
+        $indent = $m[1];
+        [, $comment] = marlin_split_value_comment($m[4] ?? '');
+        $new = $indent . ($enable ? '' : '//') . '#define ' . $key;
+        if ($value !== null && $value !== '') {
+            $new .= ' ' . $value;
+        }
+        if ($comment !== '') {
+            $new .= '  ' . $comment;
+        }
+        $doc['lines'][$i] = $new;
+        return true;
+    }
+    return false;
+}
+
+/** Leveling modes -> the Marlin define that selects them. */
+function marlin_leveling_modes(): array
+{
+    return [
+        'none'     => null,
+        '3point'   => 'AUTO_BED_LEVELING_3POINT',
+        'linear'   => 'AUTO_BED_LEVELING_LINEAR',
+        'bilinear' => 'AUTO_BED_LEVELING_BILINEAR',
+        'ubl'      => 'AUTO_BED_LEVELING_UBL',
+        'mesh'     => 'MESH_BED_LEVELING',
+    ];
+}
+
+/** Modes that need a bed probe (MESH is probeless/manual). */
+function marlin_leveling_needs_probe(string $mode): bool
+{
+    return in_array($mode, ['3point', 'linear', 'bilinear', 'ubl'], true);
+}
+
+/** Modes that use a probe grid (3POINT has no grid). */
+function marlin_leveling_has_grid(string $mode): bool
+{
+    return in_array($mode, ['linear', 'bilinear', 'ubl', 'mesh'], true);
+}
+
+function marlin_field_defs_leveling(array $board): array
+{
+    return [
+        ['key' => 'leveling', 'label' => 'Bed leveling', 'group' => 'Bed Leveling', 'type' => 'select',
+         'options' => [
+             ['value' => 'none',     'label' => 'None (disabled)'],
+             ['value' => 'bilinear', 'label' => 'Bilinear ABL (probe grid — most common)'],
+             ['value' => 'ubl',      'label' => 'UBL (probe grid + manual edit; needs EEPROM)'],
+             ['value' => 'linear',   'label' => 'Linear ABL (probe grid, tilted plane)'],
+             ['value' => '3point',   'label' => '3-Point ABL (probe, plane only)'],
+             ['value' => 'mesh',     'label' => 'Manual Mesh (no probe needed)'],
+         ]],
+        // Grid range 3-15 is the intersection that satisfies every mode:
+        // LINEAR/MESH need >=2, BILINEAR needs >=3, UBL is capped at 15.
+        ['key' => 'grid_points', 'label' => 'Grid points per axis (3-15)', 'group' => 'Bed Leveling',
+         'type' => 'int', 'min' => 3, 'max' => 15,
+         'requires' => ['leveling' => ['linear', 'bilinear', 'ubl', 'mesh']]],
+        ['key' => 'fade_height', 'label' => 'Leveling fade height (mm, 0 = off)', 'group' => 'Bed Leveling',
+         'type' => 'float', 'min' => 0, 'max' => 100,
+         'requires' => ['leveling' => ['bilinear', 'ubl', 'linear', 'mesh']]],
+        ['key' => 'level_after_g28', 'label' => 'After G28 homing', 'group' => 'Bed Leveling', 'type' => 'select',
+         'options' => [
+             ['value' => 'none',    'label' => 'Leave leveling off'],
+             ['value' => 'restore', 'label' => 'Restore previous leveling state'],
+             ['value' => 'enable',  'label' => 'Always enable leveling'],
+         ],
+         'requires' => ['leveling' => ['3point', 'linear', 'bilinear', 'ubl', 'mesh']]],
+        ['key' => 'z_safe_homing', 'label' => 'Z safe homing (home Z at bed center — recommended with a probe)',
+         'group' => 'Bed Leveling', 'type' => 'bool'],
+    ];
+}
+
+function marlin_current_values_leveling(array $doc): array
+{
+    $d = $doc['defines'];
+    $mode = 'none';
+    foreach (marlin_leveling_modes() as $key => $def) {
+        if ($def !== null && ($d[$def]['enabled'] ?? false)) {
+            $mode = $key;
+            break;
+        }
+    }
+    // Read the grid size from whichever block is active.
+    $grid = '3';
+    $start = marlin_leveling_block_start($doc, $mode);
+    if ($start !== null) {
+        $end = marlin_find_line($doc, '#^\s*#(elif|endif)\b#', $start + 1) ?? ($start + 60);
+        for ($i = $start; $i <= $end && $i < count($doc['lines']); $i++) {
+            if (preg_match('#^\s*\#define\s+GRID_MAX_POINTS_X\s+(\d+)#', (string)$doc['lines'][$i], $m)) {
+                $grid = $m[1];
+                break;
+            }
+        }
+    }
+
+    $after = 'none';
+    if ($d['RESTORE_LEVELING_AFTER_G28']['enabled'] ?? false) {
+        $after = 'restore';
+    } elseif ($d['ENABLE_LEVELING_AFTER_G28']['enabled'] ?? false) {
+        $after = 'enable';
+    }
+
+    $fade = '0';
+    if ($d['ENABLE_LEVELING_FADE_HEIGHT']['enabled'] ?? false) {
+        $raw = (string)($d['DEFAULT_LEVELING_FADE_HEIGHT']['value'] ?? '10.0');
+        $fade = preg_match('/-?\d+(?:\.\d+)?/', $raw, $m) ? $m[0] : '10';
+    }
+
+    return [
+        'leveling'        => $mode,
+        'grid_points'     => $grid,
+        'fade_height'     => $fade,
+        'level_after_g28' => $after,
+        'z_safe_homing'   => ($d['Z_SAFE_HOMING']['enabled'] ?? false) ? '1' : '0',
+    ];
+}
+
+/** Line index of the #if/#elif guard that opens the given mode's option block. */
+function marlin_leveling_block_start(array $doc, string $mode): ?int
+{
+    return match ($mode) {
+        'linear', 'bilinear' => marlin_find_line($doc, '#^\s*\#if\s+ANY\(AUTO_BED_LEVELING_LINEAR,\s*AUTO_BED_LEVELING_BILINEAR\)#'),
+        'ubl'                => marlin_find_line($doc, '#^\s*\#elif\s+ENABLED\(AUTO_BED_LEVELING_UBL\)#'),
+        'mesh'               => marlin_find_line($doc, '#^\s*\#elif\s+ENABLED\(MESH_BED_LEVELING\)#'),
+        default              => null,
+    };
+}
+
+/** Apply leveling settings to Configuration.h. */
+function marlin_apply_values_leveling(array &$doc, array $v): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+
+    $mode  = (string)($v['leveling'] ?? 'none');
+    $modes = marlin_leveling_modes();
+
+    // Exactly one leveling type may be enabled — Marlin hard-errors otherwise.
+    foreach ($modes as $key => $def) {
+        if ($def === null) {
+            continue;
+        }
+        $set($def, null, $key === $mode);
+    }
+
+    if ($mode === 'none') {
+        // Turn off dependent options so nothing dangles.
+        $set('RESTORE_LEVELING_AFTER_G28', null, false);
+        $set('ENABLE_LEVELING_AFTER_G28', null, false);
+        return $applied;
+    }
+
+    // Grid points go inside the ACTIVE block (each block declares its own).
+    if (marlin_leveling_has_grid($mode)) {
+        $start = marlin_leveling_block_start($doc, $mode);
+        if ($start !== null) {
+            $end = marlin_find_line($doc, '#^\s*\#(elif|endif)\b#', $start + 1) ?? ($start + 60);
+            $g   = (string)max(3, min(15, (int)($v['grid_points'] ?? 3)));
+            if (marlin_config_set_range($doc, 'GRID_MAX_POINTS_X', $g, true, $start, $end)) {
+                $applied[] = 'GRID_MAX_POINTS_X';
+            }
+        }
+    }
+
+    // Fade height: 0 disables the feature entirely.
+    $fade = (float)($v['fade_height'] ?? 0);
+    if ($fade > 0) {
+        $set('ENABLE_LEVELING_FADE_HEIGHT', null, true);
+        $set('DEFAULT_LEVELING_FADE_HEIGHT', rtrim(rtrim(sprintf('%.1f', $fade), '0'), '.') . '');
+    } else {
+        $set('ENABLE_LEVELING_FADE_HEIGHT', null, false);
+    }
+
+    // Only ONE of these two may be on (Marlin errors if both).
+    $after = (string)($v['level_after_g28'] ?? 'none');
+    $set('RESTORE_LEVELING_AFTER_G28', null, $after === 'restore');
+    $set('ENABLE_LEVELING_AFTER_G28', null, $after === 'enable');
+
+    // UBL cannot function without EEPROM (mesh must persist) — Marlin errors.
+    if ($mode === 'ubl') {
+        $set('EEPROM_SETTINGS', null, true);
+    }
+
+    $set('Z_SAFE_HOMING', null, ($v['z_safe_homing'] ?? '0') === '1');
+
     return $applied;
 }
 

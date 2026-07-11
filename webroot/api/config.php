@@ -93,9 +93,11 @@ switch ($action) {
         }
         $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                                marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                               marlin_field_defs_leveling($board),
                                marlin_field_defs_extended($board));
         $current = array_merge(marlin_current_values($doc), marlin_current_values_tier1($doc, $adv),
                                marlin_current_values_tier2($doc, $adv),
+                               marlin_current_values_leveling($doc),
                                marlin_current_values_extended($doc, $board));
 
         // Saved values (from a previous submit) override file-derived ones.
@@ -147,6 +149,7 @@ switch ($action) {
         }
         $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                               marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                              marlin_field_defs_leveling($board),
                               marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
         [$values, $errors] = hf_validate_fields($fields, $input);
@@ -176,6 +179,7 @@ switch ($action) {
             marlin_apply_values($doc, $values, $board),
             marlin_apply_values_motion($doc, $values),
             marlin_apply_values_tier2_conf($doc, $values),
+            marlin_apply_values_leveling($doc, $values),
             marlin_apply_values_extended($doc, $values, $board)
         );
         $appliedAdv = array_merge(

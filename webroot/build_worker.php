@@ -204,6 +204,7 @@ if ($saved === []) {
 
 $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                       marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                      marlin_field_defs_leveling($board),
                       marlin_field_defs_extended($board));
 [$vals, $errors] = hf_validate_fields($fields, $saved);
 
@@ -223,6 +224,16 @@ if (($vals['probe'] ?? 'none') !== 'none') {
         || abs((float)($vals['probe_off_y'] ?? 0)) >= (float)($vals['bed_y'] ?? 0)) {
         $conflicts[] = 'Probe offset exceeds bed size';
     }
+}
+// Probe-based leveling needs an actual probe. We can't infer the user's hardware,
+// so fail fast here rather than letting the compiler do it 90 seconds later.
+$lvl = (string)($vals['leveling'] ?? 'none');
+if (marlin_leveling_needs_probe($lvl) && ($vals['probe'] ?? 'none') === 'none') {
+    $conflicts[] = "Bed leveling '{$lvl}' needs a bed probe - select a probe, or use Manual Mesh which needs none";
+}
+if ($lvl === 'ubl' && ($vals['eeprom'] ?? '0') !== '1') {
+    // Auto-enabled on apply, but surface it so the user knows why EEPROM turned on.
+    blog('Note: UBL requires EEPROM_SETTINGS - enabling it automatically.');
 }
 if (($saved['singlenozzle'] ?? '0') === '1' && ($vals['extruders'] ?? '1') !== '2') {
     $conflicts[] = 'SINGLENOZZLE requires 2 extruders';
