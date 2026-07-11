@@ -1,0 +1,163 @@
+{
+  "id": "mks_robin_nano_v2",
+  "name": "MKS Robin Nano V2 (F103)",
+  "vendor": "Makerbase",
+  "mcu_variants": [
+    {
+      "id": "STM32F103",
+      "label": "STM32F103VET6 (72 MHz)",
+      "marlin_env": "mks_robin_nano_v1v2",
+      "klipper_mcu": "stm32f103xe",
+      "klipper_mach": "CONFIG_MACH_STM32F103"
+    }
+  ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": true
+  },
+  "marlin": {
+    "motherboard": "BOARD_MKS_ROBIN_NANO_V2",
+    "serial_ports": [
+      1,
+      -1
+    ],
+    "driver_slots": [
+      "X",
+      "Y",
+      "Z",
+      "E0",
+      "E1"
+    ],
+    "valid_drivers": [
+      "TMC2209",
+      "TMC2208",
+      "TMC2130",
+      "TMC5160",
+      "A4988",
+      "DRV8825"
+    ],
+    "onboard_uart_drivers": true,
+    "max_extruders": 2,
+    "screens": [
+      {
+        "id": "none",
+        "label": "None / headless",
+        "type": "none"
+      },
+      {
+        "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
+        "label": "RepRap Discount Full Graphic 12864",
+        "type": "mono128x64"
+      },
+      {
+        "id": "CR10_STOCKDISPLAY",
+        "label": "Creality CR-10 stock display (12864)",
+        "type": "mono128x64"
+      },
+      {
+        "id": "MKS_MINI_12864_V3",
+        "label": "MKS Mini 12864 V3",
+        "type": "mono128x64"
+      },
+      {
+        "id": "FYSETC_MINI_12864_2_1",
+        "label": "FYSETC Mini 12864 2.1 (RGB)",
+        "type": "mono128x64"
+      },
+      {
+        "id": "BTT_MINI_12864",
+        "label": "BigTreeTech Mini 12864",
+        "type": "mono128x64"
+      },
+      {
+        "id": "btt_serial_tft",
+        "label": "BTT TFT35/TFT70 (touch mode, external firmware)",
+        "type": "serial_tft"
+      }
+    ],
+    "probes": [
+      {
+        "id": "none",
+        "label": "No probe (manual leveling)",
+        "enable": [],
+        "disable": [
+          "BLTOUCH",
+          "FIX_MOUNTED_PROBE",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ]
+      },
+      {
+        "id": "bltouch",
+        "label": "BLTouch / CR Touch (dedicated probe port)",
+        "enable": [
+          "BLTOUCH",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "FIX_MOUNTED_PROBE"
+        ]
+      },
+      {
+        "id": "fixed_probe_port",
+        "label": "Fixed inductive/capacitive probe (probe port)",
+        "enable": [
+          "FIX_MOUNTED_PROBE",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "BLTOUCH"
+        ]
+      },
+      {
+        "id": "fixed_probe_zmin",
+        "label": "Fixed probe wired to Z-min endstop",
+        "enable": [
+          "FIX_MOUNTED_PROBE",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "BLTOUCH",
+          "USE_PROBE_FOR_Z_HOMING"
+        ]
+      }
+    ]
+  },
+  "klipper": {
+    "reference_config": "generic-mks-robin-nano-v2.cfg",
+    "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_STM32=y",
+      "CONFIG_MACH_STM32F103=y",
+      "CONFIG_STM32_FLASH_START_7000=y",
+      "CONFIG_SERIAL=y",
+      "CONFIG_STM32_SERIAL_USART3=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x8007000"
+    },
+    "flash_note": "Copy out/klipper.bin to the SD card as firmware.bin and power-cycle to flash.",
+    "mach": "CONFIG_MACH_STM32F103",
+    "artifact": "klipper.bin"
+  },
+  "limits": {
+    "max_bed_x": 300,
+    "max_bed_y": 300,
+    "max_z": 400,
+    "max_hotend_temp": 300,
+    "max_bed_temp": 120,
+    "max_feedrate_xy": 500,
+    "max_feedrate_z": 25
+  },
+  "min_marlin": "2.0.7",
+  "note": "Robin Nano V2 - Klipper talks over serial USART3 (PB11/PB10), not USB.",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
+}
