@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.5.0';
+const HF_VERSION = '2.5.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1097,6 +1097,12 @@ function marlin_apply_values_tier2_adv(array &$adv, array $v): array
     $set('LIN_ADVANCE', $keep('LIN_ADVANCE'), $la);
     if ($la) {
         $set('ADVANCE_K', rtrim(rtrim(sprintf('%.3f', (float)$v['advance_k']), '0'), '.'));
+    }
+
+    // Marlin requires ADVANCED_PAUSE_FEATURE (for M600) when the runout sensor
+    // is enabled — a compile-time static_assert. Enable it to satisfy that.
+    if (($v['runout'] ?? '0') === '1') {
+        $set('ADVANCED_PAUSE_FEATURE', $keep('ADVANCED_PAUSE_FEATURE'), true);
     }
     return $applied;
 }
