@@ -1368,14 +1368,18 @@ async function buildPoll() {
         clearInterval(buildTimer);
         buildTimer = null;
         buildBtn.disabled = false;
-        el('buildMsg').textContent = s.status === 'success'
-            ? 'Build succeeded at ' + conf + '% \u2014 flash firmware.bin from SD (rename not needed; SKR 3 accepts firmware.bin).'
-            : 'Build stopped at ' + conf + '% \u2014 fix the failed gate and re-run.';
         if (s.status === 'success') {
+            const art = s.artifact_name || 'firmware.bin';
+            const note = s.flash_note ? (' \u2014 ' + s.flash_note) : '';
+            el('buildMsg').textContent = 'Build succeeded at ' + conf + '%' + note;
             el('bDownloads').hidden = false;
-            el('dlFw').href  = 'api/build.php?download=' + BUILD_ID + '&type=firmware';
+            const dlFw = el('dlFw');
+            dlFw.href = 'api/build.php?download=' + BUILD_ID + '&type=firmware';
+            dlFw.textContent = 'Download ' + art;
             el('dlCfg').href = 'api/build.php?download=' + BUILD_ID + '&type=config';
             el('dlLog').href = 'api/build.php?download=' + BUILD_ID + '&type=log';
+        } else {
+            el('buildMsg').textContent = 'Build stopped at ' + conf + '% \u2014 fix the failed gate and re-run.';
         }
         buildHistoryRefresh();
     }

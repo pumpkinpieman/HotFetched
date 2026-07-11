@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.4.0';
+const HF_VERSION = '2.5.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -979,6 +979,125 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
             }
     }
 
+    return $applied;
+}
+
+
+/* -------------------------------------------------- Tier 2: quality/QOL */
+
+/** Tier-2 fields. Config.h: EEPROM, PID, runout. adv.h: linear advance, power-loss. */
+function marlin_field_defs_tier2(array $board): array
+{
+    return [
+        ['key' => 'eeprom', 'label' => 'EEPROM settings (M500/M501 save)', 'group' => 'Storage & Recovery', 'type' => 'bool'],
+        ['key' => 'eeprom_auto_init', 'label' => 'Auto-init EEPROM on error', 'group' => 'Storage & Recovery', 'type' => 'bool',
+         'requires' => ['eeprom' => ['1']]],
+        ['key' => 'power_loss', 'label' => 'Power-loss recovery', 'group' => 'Storage & Recovery', 'type' => 'bool'],
+
+        ['key' => 'pid_hotend', 'label' => 'Hotend PID (PIDTEMP)', 'group' => 'PID Tuning', 'type' => 'bool'],
+        ['key' => 'pid_kp', 'label' => 'Hotend Kp (from M303)', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 999, 'requires' => ['pid_hotend' => ['1']]],
+        ['key' => 'pid_ki', 'label' => 'Hotend Ki', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 999, 'requires' => ['pid_hotend' => ['1']]],
+        ['key' => 'pid_kd', 'label' => 'Hotend Kd', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 9999, 'requires' => ['pid_hotend' => ['1']]],
+        ['key' => 'pid_bed', 'label' => 'Bed PID (PIDTEMPBED)', 'group' => 'PID Tuning', 'type' => 'bool'],
+        ['key' => 'bed_kp', 'label' => 'Bed Kp (from M303 E-1)', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 999, 'requires' => ['pid_bed' => ['1']]],
+        ['key' => 'bed_ki', 'label' => 'Bed Ki', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 999, 'requires' => ['pid_bed' => ['1']]],
+        ['key' => 'bed_kd', 'label' => 'Bed Kd', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 9999, 'requires' => ['pid_bed' => ['1']]],
+
+        ['key' => 'lin_advance', 'label' => 'Linear Advance', 'group' => 'Tuning', 'type' => 'bool'],
+        ['key' => 'advance_k', 'label' => 'Advance K factor', 'group' => 'Tuning', 'type' => 'float', 'min' => 0, 'max' => 10, 'requires' => ['lin_advance' => ['1']]],
+
+        ['key' => 'runout', 'label' => 'Filament runout sensor', 'group' => 'Filament', 'type' => 'bool'],
+        ['key' => 'runout_enabled', 'label' => 'Enabled on startup', 'group' => 'Filament', 'type' => 'bool', 'requires' => ['runout' => ['1']]],
+    ];
+}
+
+/** Tier-2 current values from both parsed docs. */
+function marlin_current_values_tier2(array $doc, array $adv): array
+{
+    $d = $doc['defines']; $a = $adv['defines'];
+    $on = fn (array $s, string $k): string => ($s[$k]['enabled'] ?? false) ? '1' : '0';
+    $bool = function (array $s, string $k, string $def = '0'): string {
+        if (!isset($s[$k])) return $def;
+        return strtolower(trim((string)($s[$k]['value'] ?? 'true'))) === 'false' ? '0' : '1';
+    };
+    $num = function (array $s, string $k): ?string {
+        $e = $s[$k] ?? null;
+        if ($e === null || $e['value'] === null) return null;
+        return preg_match('/-?\d+(?:\.\d+)?/', (string)$e['value'], $m) ? $m[0] : null;
+    };
+    [$ak] = marlin_extract_numbers($a['ADVANCE_K']['value'] ?? null, 1);
+    return [
+        'eeprom' => $on($d, 'EEPROM_SETTINGS'),
+        'eeprom_auto_init' => $on($d, 'EEPROM_AUTO_INIT'),
+        'power_loss' => $on($a, 'POWER_LOSS_RECOVERY'),
+        'pid_hotend' => $on($d, 'PIDTEMP'),
+        'pid_kp' => $num($d, 'DEFAULT_KP') ?? '22.20',
+        'pid_ki' => $num($d, 'DEFAULT_KI') ?? '1.08',
+        'pid_kd' => $num($d, 'DEFAULT_KD') ?? '114.00',
+        'pid_bed' => $on($d, 'PIDTEMPBED'),
+        'bed_kp' => $num($d, 'DEFAULT_BED_KP') ?? '10.00',
+        'bed_ki' => $num($d, 'DEFAULT_BED_KI') ?? '0.023',
+        'bed_kd' => $num($d, 'DEFAULT_BED_KD') ?? '305.4',
+        'lin_advance' => $on($a, 'LIN_ADVANCE'),
+        'advance_k' => $ak !== null ? rtrim(rtrim(sprintf('%.3f', (float)$ak), '0'), '.') : '0.22',
+        'runout' => $on($d, 'FILAMENT_RUNOUT_SENSOR'),
+        'runout_enabled' => $bool($d, 'FIL_RUNOUT_ENABLED_DEFAULT', '1'),
+    ];
+}
+
+/** Apply Tier-2 values to Configuration.h. */
+function marlin_apply_values_tier2_conf(array &$doc, array $v): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$doc, &$applied): void {
+        if (marlin_config_set($doc, $k, $val, $en)) $applied[] = $k;
+    };
+    $keep = fn (string $k): ?string => $doc['defines'][$k]['value'] ?? null;
+
+    $set('EEPROM_SETTINGS', null, ($v['eeprom'] ?? '0') === '1');
+    if (($v['eeprom'] ?? '0') === '1') {
+        $set('EEPROM_AUTO_INIT', null, ($v['eeprom_auto_init'] ?? '0') === '1');
+    }
+
+    $pidH = ($v['pid_hotend'] ?? '0') === '1';
+    $set('PIDTEMP', $keep('PIDTEMP'), $pidH);
+    if ($pidH) {
+        $set('DEFAULT_KP', rtrim(rtrim(sprintf('%.2f', (float)$v['pid_kp']), '0'), '.'));
+        $set('DEFAULT_KI', rtrim(rtrim(sprintf('%.3f', (float)$v['pid_ki']), '0'), '.'));
+        $set('DEFAULT_KD', rtrim(rtrim(sprintf('%.2f', (float)$v['pid_kd']), '0'), '.'));
+    }
+    $pidB = ($v['pid_bed'] ?? '0') === '1';
+    $set('PIDTEMPBED', $keep('PIDTEMPBED'), $pidB);
+    if ($pidB) {
+        $set('DEFAULT_BED_KP', rtrim(rtrim(sprintf('%.2f', (float)$v['bed_kp']), '0'), '.'));
+        $set('DEFAULT_BED_KI', rtrim(rtrim(sprintf('%.3f', (float)$v['bed_ki']), '0'), '.'));
+        $set('DEFAULT_BED_KD', rtrim(rtrim(sprintf('%.2f', (float)$v['bed_kd']), '0'), '.'));
+    }
+
+    $ro = ($v['runout'] ?? '0') === '1';
+    $set('FILAMENT_RUNOUT_SENSOR', $keep('FILAMENT_RUNOUT_SENSOR'), $ro);
+    if ($ro) {
+        $set('FIL_RUNOUT_ENABLED_DEFAULT', ($v['runout_enabled'] ?? '1') === '1' ? 'true' : 'false');
+    }
+    return $applied;
+}
+
+/** Apply Tier-2 values to Configuration_adv.h. */
+function marlin_apply_values_tier2_adv(array &$adv, array $v): array
+{
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $k, $val, $en)) $applied[] = $k;
+    };
+    $keep = fn (string $k): ?string => $adv['defines'][$k]['value'] ?? null;
+
+    $set('POWER_LOSS_RECOVERY', $keep('POWER_LOSS_RECOVERY'), ($v['power_loss'] ?? '0') === '1');
+
+    $la = ($v['lin_advance'] ?? '0') === '1';
+    $set('LIN_ADVANCE', $keep('LIN_ADVANCE'), $la);
+    if ($la) {
+        $set('ADVANCE_K', rtrim(rtrim(sprintf('%.3f', (float)$v['advance_k']), '0'), '.'));
+    }
     return $applied;
 }
 

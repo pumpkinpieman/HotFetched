@@ -133,6 +133,26 @@ switch ($action) {
             }
         }
 
+        // Board-specific flashing guidance for the success banner.
+        $flashNote = '';
+        $artifactName = 'firmware.bin';
+        $proj = project_get((int)$b['project_id']);
+        if ($proj !== null) {
+            $bd = board_def((string)$proj['board_id']);
+            if ($bd !== null) {
+                if ($proj['firmware'] === 'klipper' && isset($bd['klipper'])) {
+                    $flashNote = (string)($bd['klipper']['flash_note'] ?? '');
+                    $artifactName = (string)($bd['klipper']['artifact'] ?? 'klipper.bin');
+                } elseif ($proj['firmware'] === 'marlin') {
+                    $flashNote = 'Copy firmware.bin to the SD card and reset the board to flash.';
+                    $artifactName = 'firmware.bin';
+                }
+            }
+        }
+        if (is_string($b['artifact_path']) && $b['artifact_path'] !== '') {
+            $artifactName = basename($b['artifact_path']);
+        }
+
         json_out([
             'ok'         => true,
             'status'     => $b['status'],
@@ -141,6 +161,8 @@ switch ($action) {
             'log_tail'   => $tail,
             'started_at' => $b['started_at'],
             'finished_at'=> $b['finished_at'],
+            'flash_note' => $flashNote,
+            'artifact_name' => $artifactName,
             'artifacts'  => [
                 'firmware' => $b['status'] === 'success' && $b['artifact_path'] !== null,
                 'config'   => $b['status'] === 'success',
