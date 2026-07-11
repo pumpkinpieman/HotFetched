@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.6.0';
+const HF_VERSION = '2.6.1';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1187,13 +1187,14 @@ function marlin_field_defs_leveling(array $board): array
 {
     return [
         ['key' => 'leveling', 'label' => 'Bed leveling', 'group' => 'Bed Leveling', 'type' => 'select',
-         'options' => [
-             ['value' => 'none',     'label' => 'None (disabled)'],
-             ['value' => 'bilinear', 'label' => 'Bilinear ABL (probe grid — most common)'],
-             ['value' => 'ubl',      'label' => 'UBL (probe grid + manual edit; needs EEPROM)'],
-             ['value' => 'linear',   'label' => 'Linear ABL (probe grid, tilted plane)'],
-             ['value' => '3point',   'label' => '3-Point ABL (probe, plane only)'],
-             ['value' => 'mesh',     'label' => 'Manual Mesh (no probe needed)'],
+         'options' => ['none', 'bilinear', 'ubl', 'linear', '3point', 'mesh'],
+         'option_labels' => [
+             'none'     => 'None (disabled)',
+             'bilinear' => 'Bilinear ABL (probe grid - most common)',
+             'ubl'      => 'UBL (probe grid + manual edit; needs EEPROM)',
+             'linear'   => 'Linear ABL (probe grid, tilted plane)',
+             '3point'   => '3-Point ABL (probe, plane only)',
+             'mesh'     => 'Manual Mesh (no probe needed)',
          ]],
         // Grid range 3-15 is the intersection that satisfies every mode:
         // LINEAR/MESH need >=2, BILINEAR needs >=3, UBL is capped at 15.
@@ -1204,10 +1205,11 @@ function marlin_field_defs_leveling(array $board): array
          'type' => 'float', 'min' => 0, 'max' => 100,
          'requires' => ['leveling' => ['bilinear', 'ubl', 'linear', 'mesh']]],
         ['key' => 'level_after_g28', 'label' => 'After G28 homing', 'group' => 'Bed Leveling', 'type' => 'select',
-         'options' => [
-             ['value' => 'none',    'label' => 'Leave leveling off'],
-             ['value' => 'restore', 'label' => 'Restore previous leveling state'],
-             ['value' => 'enable',  'label' => 'Always enable leveling'],
+         'options' => ['none', 'restore', 'enable'],
+         'option_labels' => [
+             'none'    => 'Leave leveling off',
+             'restore' => 'Restore previous leveling state',
+             'enable'  => 'Always enable leveling',
          ],
          'requires' => ['leveling' => ['3point', 'linear', 'bilinear', 'ubl', 'mesh']]],
         ['key' => 'z_safe_homing', 'label' => 'Z safe homing (home Z at bed center — recommended with a probe)',
