@@ -139,5 +139,9 @@
     "max_feedrate_z": 30
   },
   "note": "High-end 8-driver board with onboard TMC5160T Plus. Marlin builds now; a Klipper generic config isn't published upstream yet, so Klipper support is pending a reference cfg.",
-  "min_marlin": "2.1.3"
+  "min_marlin": "2.1.3",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

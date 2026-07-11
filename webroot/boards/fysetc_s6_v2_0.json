@@ -152,5 +152,9 @@
     "mach": "CONFIG_MACH_STM32F446",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.1"
+  "min_marlin": "2.1",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

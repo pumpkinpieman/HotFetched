@@ -151,5 +151,9 @@
     "mach": "CONFIG_MACH_RP2040",
     "artifact": "klipper.uf2"
   },
-  "min_marlin": "2.1"
+  "min_marlin": "2.1",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

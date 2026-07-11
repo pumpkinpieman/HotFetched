@@ -151,5 +151,9 @@
     "mach": "CONFIG_MACH_STM32F103",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.0.7"
+  "min_marlin": "2.0.7",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

@@ -152,5 +152,9 @@
     "mach": "CONFIG_MACH_STM32F407",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.0.9.3"
+  "min_marlin": "2.0.9.3",
+  "wifi": {
+    "supported": true,
+    "module": "ESP-01S / ESP32 WiFi-101 (SPI header)"
+  }
 }

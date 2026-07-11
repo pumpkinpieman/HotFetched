@@ -204,7 +204,7 @@ if ($saved === []) {
 
 $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                       marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
-                      marlin_field_defs_leveling($board),
+                      marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                       marlin_field_defs_extended($board));
 [$vals, $errors] = hf_validate_fields($fields, $saved);
 

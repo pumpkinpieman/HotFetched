@@ -152,5 +152,9 @@
     "artifact": "klipper.bin"
   },
   "note": "Very common Ender-3 board. Many V4.2.7 units ship with GD32 silicon, not STM32 - verify before flashing; GD32 needs a separate Klipper build path not yet automated here.",
-  "min_marlin": "2.0.8"
+  "min_marlin": "2.0.8",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

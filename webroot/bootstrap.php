@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.6.1';
+const HF_VERSION = '2.7.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1198,7 +1198,7 @@ function marlin_field_defs_leveling(array $board): array
          ]],
         // Grid range 3-15 is the intersection that satisfies every mode:
         // LINEAR/MESH need >=2, BILINEAR needs >=3, UBL is capped at 15.
-        ['key' => 'grid_points', 'label' => 'Grid points per axis (3-15)', 'group' => 'Bed Leveling',
+        ['key' => 'grid_points', 'label' => 'Grid points per axis', 'group' => 'Bed Leveling',
          'type' => 'int', 'min' => 3, 'max' => 15,
          'requires' => ['leveling' => ['linear', 'bilinear', 'ubl', 'mesh']]],
         ['key' => 'fade_height', 'label' => 'Leveling fade height (mm, 0 = off)', 'group' => 'Bed Leveling',
@@ -1333,6 +1333,71 @@ function marlin_apply_values_leveling(array &$doc, array $v): array
     }
 
     $set('Z_SAFE_HOMING', null, ($v['z_safe_homing'] ?? '0') === '1');
+
+    return $applied;
+}
+
+
+/* ----------------------------------------------------------- WiFi (ESP) */
+
+/**
+ * WiFi fields. Marlin's WIFISUPPORT drives an ESP32 WiFi-101 module on the
+ * board's SPI WiFi header — only boards whose pins file declares those pins
+ * can use it, so this is gated on board data. Note this is NOT the same as
+ * plugging an ESP-01 into a UART as a plain serial bridge (which needs no
+ * Marlin feature at all, just a second serial port).
+ */
+function marlin_field_defs_wifi(array $board): array
+{
+    if (!($board['wifi']['supported'] ?? false)) {
+        return [];
+    }
+    return [
+        ['key' => 'wifi', 'label' => 'WiFi module (WIFISUPPORT — ESP on the board WiFi header)',
+         'group' => 'WiFi', 'type' => 'bool'],
+        ['key' => 'wifi_web', 'label' => 'Web server (WEBSUPPORT)', 'group' => 'WiFi', 'type' => 'bool',
+         'requires' => ['wifi' => ['1']]],
+        ['key' => 'wifi_ota', 'label' => 'Over-the-air updates (OTASUPPORT)', 'group' => 'WiFi', 'type' => 'bool',
+         'requires' => ['wifi' => ['1']]],
+    ];
+}
+
+function marlin_current_values_wifi(array $adv, array $board): array
+{
+    if (!($board['wifi']['supported'] ?? false)) {
+        return [];
+    }
+    $a = $adv['defines'];
+    $on = fn (string $k): string => ($a[$k]['enabled'] ?? false) ? '1' : '0';
+    return [
+        'wifi'     => $on('WIFISUPPORT'),
+        'wifi_web' => $on('WEBSUPPORT'),
+        'wifi_ota' => $on('OTASUPPORT'),
+    ];
+}
+
+/** Apply WiFi settings to Configuration_adv.h. */
+function marlin_apply_values_wifi(array &$adv, array $v, array $board): array
+{
+    if (!($board['wifi']['supported'] ?? false)) {
+        return [];
+    }
+    $applied = [];
+    $set = function (string $k, ?string $val, bool $en = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $k, $val, $en)) {
+            $applied[] = $k;
+        }
+    };
+
+    $wifi = ($v['wifi'] ?? '0') === '1';
+    $set('WIFISUPPORT', null, $wifi);
+    // ESP3D_WIFISUPPORT is mutually exclusive with WIFISUPPORT and needs an
+    // ESP32 motherboard — never valid on the boards we ship. Keep it off.
+    $set('ESP3D_WIFISUPPORT', null, false);
+
+    // WEBSUPPORT / OTASUPPORT are only legal with WIFISUPPORT enabled.
+    $set('WEBSUPPORT', null, $wifi && ($v['wifi_web'] ?? '0') === '1');
+    $set('OTASUPPORT', null, $wifi && ($v['wifi_ota'] ?? '0') === '1');
 
     return $applied;
 }

@@ -155,5 +155,9 @@
     "max_bed_temp": 130,
     "max_feedrate_xy": 800,
     "max_feedrate_z": 40
+  },
+  "wifi": {
+    "supported": false,
+    "module": null
   }
 }

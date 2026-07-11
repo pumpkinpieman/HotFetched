@@ -152,5 +152,9 @@
     "artifact": "klipper.bin"
   },
   "note": "Ender-3 class board. Confirm your exact silicon (STM32 vs GD32) before flashing; the GD32 variant needs a different Klipper build.",
-  "min_marlin": "2.0.8"
+  "min_marlin": "2.0.8",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

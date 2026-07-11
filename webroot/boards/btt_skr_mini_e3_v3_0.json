@@ -151,5 +151,9 @@
     "marlin": true,
     "klipper": true
   },
-  "min_marlin": "2.1"
+  "min_marlin": "2.1",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

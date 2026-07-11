@@ -93,11 +93,12 @@ switch ($action) {
         }
         $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                                marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
-                               marlin_field_defs_leveling($board),
+                               marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                                marlin_field_defs_extended($board));
         $current = array_merge(marlin_current_values($doc), marlin_current_values_tier1($doc, $adv),
                                marlin_current_values_tier2($doc, $adv),
                                marlin_current_values_leveling($doc),
+                               marlin_current_values_wifi($adv, $board),
                                marlin_current_values_extended($doc, $board));
 
         // Saved values (from a previous submit) override file-derived ones.
@@ -149,7 +150,7 @@ switch ($action) {
         }
         $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
                               marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
-                              marlin_field_defs_leveling($board),
+                              marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                               marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
         [$values, $errors] = hf_validate_fields($fields, $input);
@@ -184,7 +185,8 @@ switch ($action) {
         );
         $appliedAdv = array_merge(
             marlin_apply_values_adv($adv, $values),
-            marlin_apply_values_tier2_adv($adv, $values)
+            marlin_apply_values_tier2_adv($adv, $values),
+            marlin_apply_values_wifi($adv, $values, $board)
         );
         if (!marlin_config_write($doc, $confPath)) {
             json_out(['ok' => false, 'error' => 'Could not write Configuration.h'], 500);

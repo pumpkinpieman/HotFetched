@@ -152,5 +152,9 @@
     "artifact": "klipper.elf"
   },
   "note": "Prusa i3 MK3/MK3S class board with integrated TMC2130 drivers.",
-  "min_marlin": "2.0"
+  "min_marlin": "2.0",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

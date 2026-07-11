@@ -150,5 +150,9 @@
     "mach": "CONFIG_MACH_atmega2560",
     "artifact": "klipper.elf"
   },
-  "min_marlin": "1.1.9"
+  "min_marlin": "1.1.9",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }

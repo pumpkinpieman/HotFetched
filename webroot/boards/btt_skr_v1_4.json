@@ -151,5 +151,9 @@
     "mach": "CONFIG_MACH_LPC1768",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "2.0"
+  "min_marlin": "2.0",
+  "wifi": {
+    "supported": false,
+    "module": null
+  }
 }
