@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <CommunityApplications>
   <Profile>
-HotFetched is a self-hosted 3D printer firmware workshop in a single Docker container. Pick a motherboard (17 boards across BigTreeTech, Creality, FYSETC, Makerbase, and generic RAMPS), import Marlin or Klipper source from GitHub or a ZIP, edit the full configuration through a web UI — drivers, sensorless homing, kinematics, TMC currents, probes, displays, boot images, and startup sounds — then run confidence-gated builds where 100% means the firmware actually compiled. Exports firmware.bin / klipper.bin plus ready-to-flash config bundles. Maintained by Ataur Rasool (Advanced Data Systems, LLC). For help, open an issue on the GitHub repository linked below.
+HotFetched is a self-hosted 3D printer firmware workshop in a single Docker container. Pick a motherboard (17 boards across BigTreeTech, Creality, FYSETC, Makerbase, and generic RAMPS), import Marlin or Klipper source from GitHub or a ZIP, edit the full configuration through a web UI — drivers, sensorless homing, kinematics, TMC currents, probes, displays, boot images, and startup sounds — then run confidence-gated builds where 100% means the firmware actually compiled. Exports firmware.bin / klipper.bin plus ready-to-flash config bundles. For help, open an issue on the GitHub repository linked below.
   </Profile>
   <Icon>https://raw.githubusercontent.com/pumpkinpieman/HotFetched/main/deploy/icon.png</Icon>
   <WebPage>https://github.com/pumpkinpieman/HotFetched</WebPage>
