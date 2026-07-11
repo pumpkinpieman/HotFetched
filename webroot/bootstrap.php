@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '2.5.1';
+const HF_VERSION = '2.5.2';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -1101,8 +1101,13 @@ function marlin_apply_values_tier2_adv(array &$adv, array $v): array
 
     // Marlin requires ADVANCED_PAUSE_FEATURE (for M600) when the runout sensor
     // is enabled — a compile-time static_assert. Enable it to satisfy that.
+    // ADVANCED_PAUSE_FEATURE in turn requires a Marlin-native LCD controller OR
+    // EMERGENCY_PARSER. Boards driven by an external-firmware TFT (or no display)
+    // have no native LCD, so enable EMERGENCY_PARSER to satisfy that dependency.
+    // It is host/serial-side only and safe to enable regardless of display type.
     if (($v['runout'] ?? '0') === '1') {
         $set('ADVANCED_PAUSE_FEATURE', $keep('ADVANCED_PAUSE_FEATURE'), true);
+        $set('EMERGENCY_PARSER', $keep('EMERGENCY_PARSER'), true);
     }
     return $applied;
 }
