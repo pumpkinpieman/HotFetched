@@ -1,0 +1,76 @@
+{
+  "id": "creality_melzi_cr10",
+  "name": "Creality Melzi (CR-10 / CR-10 S5, ATmega1284P)",
+  "vendor": "Creality",
+  "mcu_variants": [
+    {
+      "id": "ATmega1284P",
+      "label": "ATmega1284P (16 MHz)",
+      "marlin_env": "melzi_optiboot",
+      "klipper_mcu": "atmega1284p"
+    }
+  ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": true,
+    "reprap": false
+  },
+  "ui": {
+    "lcd": true,
+    "beeper": true,
+    "neopixel": false,
+    "z_steppers": 1
+  },
+  "limits": {
+    "max_bed_x": 500,
+    "max_bed_y": 500,
+    "max_z": 500,
+    "max_hotend_temp": 260,
+    "max_bed_temp": 110,
+    "max_feedrate_xy": 500,
+    "max_feedrate_z": 20
+  },
+  "marlin": {
+    "motherboard": "BOARD_MELZI_CREALITY",
+    "serial_ports": [0, -1],
+    "driver_slots": ["X", "Y", "Z", "E0"],
+    "valid_drivers": ["A4988", "DRV8825"],
+    "onboard_uart_drivers": false,
+    "max_extruders": 1,
+    "screens": [
+      { "id": "none", "label": "None / headless", "type": "none" },
+      { "id": "CR10_STOCKDISPLAY", "label": "Creality CR-10 stock display (12864)", "type": "mono128x64" },
+      { "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER", "label": "RepRap Discount Full Graphic 12864", "type": "mono128x64" }
+    ],
+    "probes": [
+      { "id": "none", "label": "None (manual leveling)" },
+      { "id": "bltouch", "label": "BLTouch / CR-Touch" },
+      { "id": "probe", "label": "Fixed / inductive probe" }
+    ],
+    "flash_note": "Flash out/firmware.hex via avrdude over USB. Creality Melzi ships an Optiboot bootloader (env melzi_optiboot) - no SD flashing on this board."
+  },
+  "klipper": {
+    "reference_config": "generic-melzi.cfg",
+    "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_AVR=y",
+      "CONFIG_MACH_atmega1284p=y",
+      "CONFIG_AVR_FREQ_16000000=y",
+      "CONFIG_AVR_SERIAL_UART0=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x0"
+    },
+    "flash_note": "Flash out/klipper.elf via avrdude over USB (avrdude -p m1284p -c arduino). No SD flashing. A CR-10 S5 running Klipper needs an external host (Pi/PC).",
+    "mach": "CONFIG_MACH_atmega1284p",
+    "artifact": "klipper.elf"
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": null
+  },
+  "note": "Melzi-class board used in the Creality CR-10 family including the 500x500x500 CR-10 S5. ATmega1284P with SOLDERED A4988-class drivers (no swappable sockets, no TMC/UART). Single extruder, single Z on the base board (the S5 uses one Z motor with a synchronizing belt). AVR flash is tight - large feature sets (UBL, many languages, MMU) may not fit in 128KB."
+}

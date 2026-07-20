@@ -305,6 +305,7 @@ a.btn { text-decoration: none; display: inline-block; }
     font-weight: 700;
     font-size: 12px;
 }
+.cfg-warning a { color: inherit; }
 
 /* Boot/status image controls */
 .bs-range { display: block; }
@@ -328,3 +329,24 @@ a.btn { text-decoration: none; display: inline-block; }
              border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
 .snd-myname { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 .snd-myrow .btn { flex: 0 0 auto; width: auto; }
+
+/* Firmware verifier */
+.verify-panel { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line);
+                border-radius: 8px; background: var(--bg); }
+.verify-upload { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.vf-head { padding-bottom: 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.vf-id { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.vf-list { list-style: none; margin: 6px 0 14px; padding: 0; }
+.vf-list li { padding: 5px 0; font-size: 13.5px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.vf-note { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.vf-note-block { color: var(--muted); font-size: 12.5px; margin: 8px 0; line-height: 1.5; }
+.vf-dim { opacity: .8; }
+.vf-ok  { color: #4ade80; font-size: 13px; margin: 10px 0 0; }
+.vf-bad { color: #f87171; font-size: 13px; margin: 10px 0 0; }
+.vf-inf { color: var(--accent); font-size: 13px; margin: 10px 0 0; }
+.vf-tick  { color: #4ade80; font-weight: 700; }
+.vf-x     { color: #f87171; font-weight: 700; }
+.vf-tilde { color: var(--accent); font-weight: 700; }
+.vf-str { color: #93c5fd; font-size: 13px; margin: 10px 0 0; }
+.vf-strings { max-height: 220px; overflow: auto; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 6px; padding: 10px; font-size: 12px; margin: 6px 0 12px; white-space: pre-wrap; }

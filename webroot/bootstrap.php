@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.3.1';
+const HF_VERSION = '3.6.2';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -683,17 +683,20 @@ function marlin_field_defs(array $board): array
          'requires' => ['extruders' => ['2', '3', '4', '5', '6', '7', '8']]],
 
         ['key' => 'extruders',    'label' => 'Extruders (logical tools)', 'group' => 'Extruder', 'type' => 'select',
-         // A board can only drive as many E motors as it has slots - except with an
-         // MMU, which reports 5 tools but uses a single E motor. So allow up to 5
-         // for MMU users while still reflecting the board's physical limit.
-         'options' => array_map('strval', range(1, max(5, $eSlots))),
-         'hint' => $eSlots . ' physical E slot(s) on this board; more than that requires an MMU'],
+         // Standard printer configurations expose 1-5 logical tools. The special
+         // value 12 is reserved for the custom Prusa MMU3-12x firmware.
+         'options' => ['1', '2', '3', '4', '5', '12'],
+         'hint' => $eSlots . ' physical E slot(s) on this board; more than that requires an MMU',
+         'warning_text' => 'Only select if you have 12 extruder MMU3',
+         'warning_values' => ['12'],
+         'warning_link' => 'https://github.com/cjbaar/Prusa-Firmware-MMU-12x',
+         'warning_link_text' => 'Prusa MMU3-12x firmware'],
         ['key' => 'singlenozzle', 'label' => 'Multiple extruders share one nozzle (SINGLENOZZLE)', 'group' => 'Extruder', 'type' => 'bool',
          'requires' => ['extruders' => ['2', '3', '4', '5', '6', '7', '8']]],
 
-        ['key' => 'bed_x',  'label' => 'Bed size X (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_x']],
-        ['key' => 'bed_y',  'label' => 'Bed size Y (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_bed_y']],
-        ['key' => 'z_max',  'label' => 'Z height (mm)',   'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => (int)$lim['max_z']],
+        ['key' => 'bed_x',  'label' => 'Bed size X (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, (int)($lim['max_bed_x'] ?? 0))],
+        ['key' => 'bed_y',  'label' => 'Bed size Y (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, (int)($lim['max_bed_y'] ?? 0))],
+        ['key' => 'z_max',  'label' => 'Z height (mm)',   'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, (int)($lim['max_z'] ?? 0))],
 
         ['key' => 'feed_x', 'label' => 'Max feedrate X (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 10, 'max' => (int)$lim['max_feedrate_xy']],
         ['key' => 'feed_y', 'label' => 'Max feedrate Y (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 10, 'max' => (int)$lim['max_feedrate_xy']],
@@ -811,7 +814,7 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     // E motor (the unit's own selector picks the filament), so declaring
     // E1..E4_DRIVER_TYPE there would demand pins the board doesn't have.
     // Driver types must therefore follow the PHYSICAL stepper count.
-    $nExt = max(1, min(8, (int)($v['extruders'] ?? 1)));
+    $nExt = max(1, min(12, (int)($v['extruders'] ?? 1)));
     $set('EXTRUDERS', (string)$nExt);
 
     $mmu       = (string)($v['mmu_model'] ?? 'none');
@@ -1530,9 +1533,9 @@ function rrf_field_defs(array $board): array
          'options' => ['wifi', 'sbc', 'usb'],
          'option_labels' => ['wifi' => 'WiFi (ESP module)', 'sbc' => 'SBC (Raspberry Pi)', 'usb' => 'USB / serial only']],
 
-        ['key' => 'bed_x', 'label' => 'X travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_bed_x', 500)],
-        ['key' => 'bed_y', 'label' => 'Y travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_bed_y', 500)],
-        ['key' => 'z_max', 'label' => 'Z height (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $lmax('max_z', 600)],
+        ['key' => 'bed_x', 'label' => 'X travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $lmax('max_bed_x', 500))],
+        ['key' => 'bed_y', 'label' => 'Y travel (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $lmax('max_bed_y', 500))],
+        ['key' => 'z_max', 'label' => 'Z height (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $lmax('max_z', 600))],
 
         ['key' => 'max_velocity', 'label' => 'Max speed XY (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 20, 'max' => $lmax('max_feedrate_xy', 800)],
         ['key' => 'max_accel', 'label' => 'Max acceleration (mm/s2)', 'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 20000],
@@ -1889,6 +1892,59 @@ function marlin_mmu_models(): array
     ];
 }
 
+/**
+ * Translate the user-facing MMU selection into the Marlin model written to
+ * Configuration.h. Marlin already defines EXTENDABLE_EMU_MMU3 internally;
+ * using it preserves the MMU3 protocol while allowing more than five tools.
+ */
+function marlin_effective_mmu_model(array $v): string
+{
+    $model = (string)($v['mmu_model'] ?? 'none');
+    return $model === 'PRUSA_MMU3' && (int)($v['extruders'] ?? 1) === 12
+        ? 'EXTENDABLE_EMU_MMU3'
+        : $model;
+}
+
+/**
+ * Enable Marlin's existing EXTENDABLE_EMU_MMU3 token in the imported source.
+ * The upstream conditionals define the model and route it through MMU3, but
+ * some trees omit it from HAS_EXTENDABLE_MMU, which leaves the 5/8-tool sanity
+ * limits active. Returns ['ok' => bool, 'changed' => bool, 'detail' => string].
+ */
+function marlin_enable_extendable_mmu3(string $tree): array
+{
+    $paths = [
+        rtrim($tree, '/') . '/Marlin/src/inc/Conditionals-1-axes.h',
+        rtrim($tree, '/') . '/Marlin/src/inc/Conditionals_post.h',
+    ];
+
+    foreach ($paths as $path) {
+        if (!is_file($path)) continue;
+        $txt = @file_get_contents($path);
+        if ($txt === false || !str_contains($txt, '_EXTENDABLE_EMU_MMU3')) continue;
+
+        // Already enabled in the HAS_EXTENDABLE_MMU condition.
+        if (preg_match('/#if[^\r\n]*_EXTENDABLE_EMU_MMU3[^\r\n]*\R\s*#define\s+HAS_EXTENDABLE_MMU\b/', $txt)) {
+            return ['ok' => true, 'changed' => false, 'detail' => basename($path) . ' already supports extendable MMU3'];
+        }
+
+        $pattern = '/#if\s+_MMU\s*==\s*_EXTENDABLE_EMU_MMU2\s*\|\|\s*_MMU\s*==\s*_EXTENDABLE_EMU_MMU2S(?!\s*\|\|)/';
+        $replace = '#if _MMU == _EXTENDABLE_EMU_MMU2 || _MMU == _EXTENDABLE_EMU_MMU2S || _MMU == _EXTENDABLE_EMU_MMU3';
+        $patched = preg_replace($pattern, $replace, $txt, 1, $count);
+        if ($patched === null || $count !== 1) continue;
+        if (@file_put_contents($path, $patched) === false) {
+            return ['ok' => false, 'changed' => false, 'detail' => 'Could not update ' . $path];
+        }
+        return ['ok' => true, 'changed' => true, 'detail' => 'Enabled EXTENDABLE_EMU_MMU3 in ' . basename($path)];
+    }
+
+    return [
+        'ok' => false,
+        'changed' => false,
+        'detail' => 'This Marlin source does not expose EXTENDABLE_EMU_MMU3. Import a current bugfix-2.1.x / Marlin 2.1.3 source tree.',
+    ];
+}
+
 /** Models that require exactly 5 extruders (Prusa 5-port units). */
 function marlin_mmu_needs_5(string $m): bool
 {
@@ -1931,7 +1987,7 @@ function marlin_field_defs_mmu(array $board): array
              'PRUSA_MMU1'           => 'Prusa MMU1 (multiplexer, no serial)',
              'PRUSA_MMU2'           => 'Prusa MMU2',
              'PRUSA_MMU2S'          => 'Prusa MMU2S (needs 5 extruders)',
-             'PRUSA_MMU3'           => 'Prusa MMU3 (5 extruders; requires Marlin 2.1.3+ / bugfix-2.1.x)',
+             'PRUSA_MMU3'           => 'Prusa MMU3 (5 tools; 12 with MMU3-12x firmware)',
              'EXTENDABLE_EMU_MMU2'  => 'ERCF / SMuFF (MMU2 protocol)',
              'EXTENDABLE_EMU_MMU2S' => 'ERCF / SMuFF (MMU2S protocol)',
          ]],
@@ -1959,7 +2015,9 @@ function marlin_current_values_mmu(array $doc, array $adv): array
     $model = 'none';
     if (($d['MMU_MODEL']['enabled'] ?? false)) {
         $v = trim((string)($d['MMU_MODEL']['value'] ?? ''));
-        if (isset(marlin_mmu_models()[$v])) {
+        if ($v === 'EXTENDABLE_EMU_MMU3') {
+            $model = 'PRUSA_MMU3';
+        } elseif (isset(marlin_mmu_models()[$v])) {
             $model = $v;
         }
     }
@@ -1991,7 +2049,7 @@ function marlin_apply_values_mmu_conf(array &$doc, array $v): array
         }
     };
 
-    $model = (string)($v['mmu_model'] ?? 'none');
+    $model = marlin_effective_mmu_model($v);
     $on    = $model !== 'none';
     $set('MMU_MODEL', $on ? $model : null, $on);
 
@@ -3249,9 +3307,9 @@ function klipper_field_defs(array $board): array
     // field impossible to satisfy (max < min). Fall back to generous defaults.
     $limMax = fn (string $k, int $default): int => (($v = (int)($lim[$k] ?? 0)) > 0 ? $v : $default);
     return [
-        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_x', 500)],
-        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_y', 500)],
-        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_z', 600)],
+        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_bed_x', 500))],
+        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_bed_y', 500))],
+        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_z', 600))],
         ['key' => 'kl_velocity', 'label' => 'max_velocity (mm/s)',  'group' => 'Speed', 'type' => 'int', 'min' => 20,  'max' => 1000],
         ['key' => 'kl_accel',    'label' => 'max_accel (mm/s²)',    'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 50000],
         ['key' => 'kl_cur_x',  'label' => 'X run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],

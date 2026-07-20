@@ -446,6 +446,13 @@ function cfgApplyVisibility() {
             const cap = wrap.querySelector('span');
             if (cap) cap.textContent = f.label + ` (${f.min}\u2013${max})`;
         }
+
+        const warn = document.getElementById('cfwarn_' + f.key);
+        if (warn) {
+            const showForValue = !f.warning_values
+                || f.warning_values.map(String).includes(String(values[f.key] ?? ''));
+            warn.hidden = hide || !showForValue;
+        }
     }
 }
 
@@ -1269,8 +1276,18 @@ function cfgRender(fields, values, meta) {
 
             if (f.warning_text) {
                 const warn = document.createElement('span');
+                warn.id = 'cfwarn_' + f.key;
                 warn.className = 'cfg-warning';
-                warn.textContent = f.warning_text;
+                warn.appendChild(document.createTextNode(f.warning_text));
+                if (f.warning_link) {
+                    warn.appendChild(document.createTextNode(' — '));
+                    const link = document.createElement('a');
+                    link.href = f.warning_link;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.textContent = f.warning_link_text || 'More information';
+                    warn.appendChild(link);
+                }
                 wrap.appendChild(warn);
             }
 

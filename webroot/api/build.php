@@ -148,7 +148,7 @@ switch ($action) {
                     $flashNote = (string)($bd['klipper']['flash_note'] ?? '');
                     $artifactName = (string)($bd['klipper']['artifact'] ?? 'klipper.bin');
                 } elseif ($proj['firmware'] === 'marlin') {
-                    $flashNote = 'Copy firmware.bin to the SD card and reset the board to flash.';
+                    $flashNote = (string)($bd['marlin']['flash_note'] ?? 'Copy the firmware to the SD card and reset the board to flash.');
                     $artifactName = 'firmware.bin';
                 }
             }

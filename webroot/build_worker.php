@@ -384,10 +384,20 @@ if (!$mmuMulti && $eSlotCount > 0 && $nExtSel > $eSlotCount) {
     $conflicts[] = "This board has only {$eSlotCount} E driver slot(s), so it cannot drive {$nExtSel} extruders - reduce the count, or use a multi-material unit (which drives many tools from one E motor)";
 }
 
-// Prusa MMU2S/MMU3 are 5-port units: Marlin requires EXTRUDERS = 5 exactly.
+// Standard Prusa MMUs use 5 tools.
+// PRUSA_MMU3 may also use 12 tools with the custom MMU-12x firmware.
 $mmu = (string)($vals['mmu_model'] ?? 'none');
-if (marlin_mmu_needs_5($mmu) && (int)($vals['extruders'] ?? 1) !== 5) {
-    $conflicts[] = "{$mmu} is a 5-port unit and requires exactly 5 extruders - set Extruders to 5";
+
+if (marlin_mmu_needs_5($mmu)) {
+    $allowedExtruders = $mmu === 'PRUSA_MMU3'
+        ? [5, 12]
+        : [5];
+
+    if (!in_array($nExtSel, $allowedExtruders, true)) {
+        $conflicts[] = $mmu === 'PRUSA_MMU3'
+            ? 'PRUSA_MMU3 requires 5 extruders, or 12 when using the custom MMU-12x firmware'
+            : "{$mmu} is a 5-port unit and requires exactly 5 extruders - set Extruders to 5";
+    }
 }
 if ($mmu !== 'none' && $mmu !== 'PRUSA_MMU1' && (int)($vals['extruders'] ?? 1) < 2) {
     $conflicts[] = 'A multi-material unit needs more than one extruder - raise the Extruders count';
@@ -451,6 +461,22 @@ $advPath  = $root !== false ? realpath($root . '/' . $advRel) : false;
 $doc    = ($confPath !== false && str_starts_with((string)$confPath, $root . '/')) ? marlin_config_parse($confPath) : null;
 $docAdv = ($advPath !== false && str_starts_with((string)$advPath, $root . '/')) ? marlin_config_parse($advPath) : null;
 
+// A project saved before MMU12 support may still contain PRUSA_MMU3 in
+// Configuration.h. Correct it here as well as on form save so the next build
+// works immediately after replacing the webroot files.
+$mmuConfigWriteOk = true;
+$effectiveMmu = marlin_effective_mmu_model($vals);
+if ($doc !== null && $effectiveMmu === 'EXTENDABLE_EMU_MMU3') {
+    $currentMmu = trim((string)($doc['defines']['MMU_MODEL']['value'] ?? ''));
+    if ($currentMmu !== $effectiveMmu) {
+        marlin_config_set($doc, 'MMU_MODEL', $effectiveMmu, true);
+        $mmuConfigWriteOk = $confPath !== false && marlin_config_write($doc, $confPath);
+        blog($mmuConfigWriteOk
+            ? 'MMU12 config: MMU_MODEL set to EXTENDABLE_EMU_MMU3'
+            : 'MMU12 config failure: could not update Configuration.h');
+    }
+}
+
 $confidence += gate('s2_parse', 'Configuration files parse cleanly', 10, $doc !== null && $docAdv !== null,
     $doc === null ? 'Configuration.h unreadable' : ($docAdv === null ? 'Configuration_adv.h unreadable' : ''));
 
@@ -483,24 +509,36 @@ $confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin v
    symbol is undefined, silently evaluates to 0, and E_STEPPERS falls back to
    EXTRUDERS - producing bogus "E2_STEP_PIN not defined" errors instead of an
    honest "unsupported" message. PRUSA_MMU3 landed in Marlin 2.1.3 / bugfix-2.1.x. */
-$mmuPick = (string)($vals['mmu_model'] ?? 'none');
+$mmuPick = marlin_effective_mmu_model($vals);
+$treeRoot = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '');
+$mmu12Prepare = null;
+if ($mmuPick === 'EXTENDABLE_EMU_MMU3') {
+    $mmu12Prepare = marlin_enable_extendable_mmu3($treeRoot);
+    blog(($mmu12Prepare['ok'] ? 'MMU12 source: ' : 'MMU12 source failure: ') . $mmu12Prepare['detail']);
+}
 if ($mmuPick !== 'none') {
-    $condPath = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '')
-              . '/Marlin/src/inc/Conditionals-1-axes.h';
+    $condPath = $treeRoot . '/Marlin/src/inc/Conditionals-1-axes.h';
     $condTxt  = @file_get_contents($condPath);
     if ($condTxt === false) {
         // Older trees keep this in Conditionals_post.h
         $condTxt = (string)@file_get_contents(
-            $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '')
-            . '/Marlin/src/inc/Conditionals_post.h');
+            $treeRoot . '/Marlin/src/inc/Conditionals_post.h');
     }
     $mmuKnown = $condTxt !== '' && str_contains((string)$condTxt, '_' . $mmuPick . ' ');
+    if ($mmuPick === 'EXTENDABLE_EMU_MMU3'
+        && (!($mmu12Prepare['ok'] ?? false) || !$mmuConfigWriteOk)) {
+        $mmuKnown = false;
+    }
     $mmuDetail = $mmuKnown
-        ? ''
-        : "The imported Marlin version does not know {$mmuPick}. "
-          . ($mmuPick === 'PRUSA_MMU3'
-             ? 'MMU3 needs Marlin 2.1.3 or newer - re-import using the bugfix-2.1.x branch.'
-             : 'Import a newer Marlin, or pick an MMU model this version supports.');
+        ? (($mmu12Prepare['changed'] ?? false) ? (string)$mmu12Prepare['detail'] : '')
+        : (!$mmuConfigWriteOk
+            ? 'Could not update Configuration.h for the 12-tool MMU3 model.'
+            : (($mmu12Prepare['detail'] ?? '') !== ''
+                ? (string)$mmu12Prepare['detail']
+                : "The imported Marlin version does not know {$mmuPick}. "
+                  . ($mmuPick === 'PRUSA_MMU3'
+                     ? 'MMU3 needs Marlin 2.1.3 or newer - re-import using the bugfix-2.1.x branch.'
+                     : 'Import a newer Marlin, or pick an MMU model this version supports.')));
     $confidence += gate('s2_mmu', 'MMU model is supported by the imported Marlin version', 5, $mmuKnown, $mmuDetail);
 } else {
     $confidence += gate('s2_mmu', 'MMU model is supported by the imported Marlin version', 5, true, 'No MMU selected');
@@ -570,21 +608,33 @@ $cmd = 'cd ' . escapeshellarg($root . ($detect['root'] !== '' ? '/' . $detect['r
 
 $exit = (int)trim((string)shell_exec($cmd));
 
-$fwSrc = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '') . '/.pio/build/' . $env . '/firmware.bin';
-$built = $exit === 0 && is_file($fwSrc);
+// PlatformIO's output extension depends on the MCU family:
+//   STM32 / LPC -> firmware.bin   AVR (Melzi/RAMPS) -> firmware.hex   RP2040 -> firmware.uf2
+$pioDir = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '') . '/.pio/build/' . $env;
+$fwSrc  = '';
+$fwName = '';
+foreach (['firmware.bin', 'firmware.hex', 'firmware.uf2'] as $cand) {
+    if (is_file($pioDir . '/' . $cand)) {
+        $fwSrc  = $pioDir . '/' . $cand;
+        $fwName = $cand;
+        break;
+    }
+}
+$built = $exit === 0 && $fwSrc !== '';
 
 $detail = '';
 if (!$built) {
     $tail = (string)@shell_exec('grep -iE "error|#error" ' . escapeshellarg($logPath) . ' | tail -8');
     $detail = $exit === 124 ? 'Compile timed out (40 min)' : ((trim($tail) !== '') ? trim($tail) : 'Compiler exited ' . $exit);
 }
-$confidence += gate('s3_compile', 'PlatformIO compile produces firmware.bin', 40, $built, $detail);
+$confidence += gate('s3_compile', 'PlatformIO compile produces firmware', 40, $built, $detail);
 
 if ($built) {
-    @copy($fwSrc, $buildDir . '/firmware.bin');
+    // Keep the real extension so users flash the right file (.hex != .bin).
+    @copy($fwSrc, $buildDir . '/' . $fwName);
     db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')
-        ->execute([$buildDir . '/firmware.bin', $buildId]);
-    blog('firmware.bin: ' . number_format((float)filesize($fwSrc)) . ' bytes');
+        ->execute([$buildDir . '/' . $fwName, $buildId]);
+    blog($fwName . ': ' . number_format((float)filesize($fwSrc)) . ' bytes');
 
     // Config bundle for export/download
     $zip = new ZipArchive();

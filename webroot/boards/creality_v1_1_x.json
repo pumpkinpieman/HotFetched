@@ -1,0 +1,216 @@
+{
+  "id": "creality_v1_1_x",
+  "name": "Creality V1.1.x (Melzi / ATmega1284P)",
+  "vendor": "Creality",
+  "mcu_variants": [
+    {
+      "id": "ATmega1284P_stock_optimized",
+      "label": "ATmega1284P \u2014 stock Melzi bootloader, size-optimized (recommended)",
+      "marlin_env": "melzi_optimized",
+      "marlin_artifact": "firmware.hex",
+      "artifact_format": "Intel HEX",
+      "klipper_mcu": "atmega1284p",
+      "klipper_mach": "CONFIG_MACH_atmega1284p",
+      "bootloader": "Stock Melzi / Sanguino bootloader (4 KiB application-space reservation)",
+      "upload_protocol": "arduino",
+      "upload_speed": 57600,
+      "max_flash_bytes": 126976,
+      "flash_note": "Flash over the board's USB serial connection. Creality V1.1.x boards do not support Marlin SD-card firmware updates.",
+      "flash_command": "avrdude -p atmega1284p -c arduino -b 57600 -P {PORT} -D -U flash:w:{FIRMWARE}:i",
+      "clock_hz": 16000000,
+      "flash_bytes": 131072,
+      "sram_bytes": 16384,
+      "eeprom_bytes": 4096,
+      "bootloader_bytes": 4096
+    },
+    {
+      "id": "ATmega1284P_stock",
+      "label": "ATmega1284P \u2014 stock Melzi bootloader, standard build",
+      "marlin_env": "melzi",
+      "marlin_artifact": "firmware.hex",
+      "artifact_format": "Intel HEX",
+      "klipper_mcu": "atmega1284p",
+      "klipper_mach": "CONFIG_MACH_atmega1284p",
+      "bootloader": "Stock Melzi / Sanguino bootloader (4 KiB application-space reservation)",
+      "upload_protocol": "arduino",
+      "upload_speed": 57600,
+      "max_flash_bytes": 126976,
+      "flash_note": "Flash over the board's USB serial connection. Creality V1.1.x boards do not support Marlin SD-card firmware updates.",
+      "flash_command": "avrdude -p atmega1284p -c arduino -b 57600 -P {PORT} -D -U flash:w:{FIRMWARE}:i",
+      "clock_hz": 16000000,
+      "flash_bytes": 131072,
+      "sram_bytes": 16384,
+      "eeprom_bytes": 4096,
+      "bootloader_bytes": 4096
+    },
+    {
+      "id": "ATmega1284P_optiboot_optimized",
+      "label": "ATmega1284P \u2014 Optiboot, size-optimized",
+      "marlin_env": "melzi_optiboot_optimized",
+      "marlin_artifact": "firmware.hex",
+      "artifact_format": "Intel HEX",
+      "klipper_mcu": "atmega1284p",
+      "klipper_mach": "CONFIG_MACH_atmega1284p",
+      "bootloader": "Optiboot profile (1 KiB application-space reservation)",
+      "upload_protocol": "arduino",
+      "upload_speed": 115200,
+      "max_flash_bytes": 130048,
+      "flash_note": "Use this profile only after Optiboot has been installed with an ISP programmer. Flash over USB serial at 115200 baud.",
+      "flash_command": "avrdude -p atmega1284p -c arduino -b 115200 -P {PORT} -D -U flash:w:{FIRMWARE}:i",
+      "clock_hz": 16000000,
+      "flash_bytes": 131072,
+      "sram_bytes": 16384,
+      "eeprom_bytes": 4096,
+      "bootloader_bytes": 1024
+    },
+    {
+      "id": "ATmega1284P_optiboot",
+      "label": "ATmega1284P \u2014 Optiboot, standard build",
+      "marlin_env": "melzi_optiboot",
+      "marlin_artifact": "firmware.hex",
+      "artifact_format": "Intel HEX",
+      "klipper_mcu": "atmega1284p",
+      "klipper_mach": "CONFIG_MACH_atmega1284p",
+      "bootloader": "Optiboot profile (1 KiB application-space reservation)",
+      "upload_protocol": "arduino",
+      "upload_speed": 115200,
+      "max_flash_bytes": 130048,
+      "flash_note": "Use this profile only after Optiboot has been installed with an ISP programmer. Flash over USB serial at 115200 baud.",
+      "flash_command": "avrdude -p atmega1284p -c arduino -b 115200 -P {PORT} -D -U flash:w:{FIRMWARE}:i",
+      "clock_hz": 16000000,
+      "flash_bytes": 131072,
+      "sram_bytes": 16384,
+      "eeprom_bytes": 4096,
+      "bootloader_bytes": 1024
+    }
+  ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": true,
+    "reprap": false
+  },
+  "marlin": {
+    "motherboard": "BOARD_MELZI_CREALITY",
+    "artifact": "firmware.hex",
+    "artifact_format": "Intel HEX",
+    "serial_ports": [
+      0,
+      -1
+    ],
+    "driver_slots": [
+      "X",
+      "Y",
+      "Z",
+      "E0"
+    ],
+    "valid_drivers": [
+      "A4988",
+      "TMC2208_STANDALONE"
+    ],
+    "onboard_uart_drivers": false,
+    "max_extruders": 1,
+    "screens": [
+      {
+        "id": "none",
+        "label": "None / headless",
+        "type": "none"
+      },
+      {
+        "id": "CR10_STOCKDISPLAY",
+        "label": "Creality CR-10 / Ender stock 12864 display",
+        "type": "mono128x64"
+      }
+    ],
+    "probes": [
+      {
+        "id": "none",
+        "label": "No probe (manual leveling)",
+        "enable": [],
+        "disable": [
+          "BLTOUCH",
+          "FIX_MOUNTED_PROBE",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ]
+      },
+      {
+        "id": "bltouch_pin27_zmin",
+        "label": "BLTouch / CR Touch \u2014 pin-27 adapter; probe signal on Z-min",
+        "enable": [
+          "BLTOUCH",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "FIX_MOUNTED_PROBE"
+        ]
+      },
+      {
+        "id": "fixed_probe_zmin",
+        "label": "Fixed probe wired to Z-min",
+        "enable": [
+          "FIX_MOUNTED_PROBE",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "BLTOUCH"
+        ]
+      }
+    ]
+  },
+  "klipper": {
+    "reference_config": "printer-creality-ender3-2018.cfg",
+    "config_seed": [
+      "CONFIG_LOW_LEVEL_OPTIONS=y",
+      "CONFIG_MACH_AVR=y",
+      "CONFIG_MACH_atmega1284p=y",
+      "CONFIG_AVR_FREQ_16000000=y",
+      "CONFIG_AVR_SERIAL_UART0=y"
+    ],
+    "kconfig": {
+      "FLASH_APPLICATION_ADDRESS": "0x0"
+    },
+    "flash_note": "Klipper creates out/klipper.elf.hex. Stock Melzi bootloaders normally flash with avrdude at 57600 baud; Optiboot normally uses 115200 baud. Match the baud rate to the selected bootloader profile.",
+    "mach": "CONFIG_MACH_atmega1284p",
+    "artifact": "klipper.elf.hex"
+  },
+  "limits": {
+    "max_bed_x": 2000,
+    "max_bed_y": 2000,
+    "max_z": 2000,
+    "max_hotend_temp": 285,
+    "max_bed_temp": 120,
+    "max_feedrate_xy": 300,
+    "max_feedrate_z": 20
+  },
+  "min_marlin": "2.0.0",
+  "note": "Creality V1.1.2 through V1.1.5 are 8-bit Melzi-derived ATmega1284P boards. Select A4988 for standard/non-silent boards and TMC2208_STANDALONE for V1.1.4/V1.1.5 silent-driver variants after verifying the installed driver hardware. Firmware is exported as Intel HEX and flashed over USB serial or ISP; these boards do not update Marlin from an SD card.",
+  "wifi": {
+    "supported": false,
+    "module": null,
+    "note": "No onboard Wi-Fi firmware target. External ESP modules run separate firmware and should use an available serial interface only after checking the board wiring."
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": "RepRapFirmware is not supported on this 8-bit AVR target."
+  },
+  "ui": {
+    "lcd": true,
+    "beeper": true,
+    "neopixel": false,
+    "z_steppers": 1
+  },
+  "revisions": [
+    "V1.1.2",
+    "V1.1.3",
+    "V1.1.4",
+    "V1.1.5"
+  ]
+}
