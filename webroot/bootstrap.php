@@ -948,7 +948,9 @@ function marlin_current_values_extended(array $doc, array $board): array
 
     $screen = 'none';
     foreach (($board['marlin']['screens'] ?? []) as $s) {
-        if ($s['type'] === 'mono128x64' && ($d[$s['id']]['enabled'] ?? false)) {
+        $type = (string)($s['type'] ?? '');
+        if (in_array($type, ['mono128x64', 'char20x4'], true)
+            && ($d[$s['id']]['enabled'] ?? false)) {
             $screen = $s['id'];
             break;
         }
@@ -1018,7 +1020,7 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
     $mono12864 = null;
     foreach (($board['marlin']['screens'] ?? []) as $s) {
         $t = (string)($s['type'] ?? '');
-        if ($t === 'mono128x64') {
+        if (in_array($t, ['mono128x64', 'char20x4'], true)) {
             $set($s['id'], null, $selScreen === $s['id']);
             if ($s['id'] === 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER') {
                 $mono12864 = $s['id'];

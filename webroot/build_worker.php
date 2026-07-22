@@ -76,6 +76,9 @@ function blog(string $msg): void
 function bstate(string $status, ?int $conf = null, bool $finished = false): void
 {
     global $buildId, $gates, $logPath;
+    if ($conf !== null) {
+        $conf = max(0, min(100, $conf));
+    }
     $sql = "UPDATE builds SET status = ?, gate_json = ?, log_path = ?"
          . ($conf !== null ? ", confidence = " . (int)$conf : "")
          . ($finished ? ", finished_at = datetime('now')" : "")
@@ -477,7 +480,7 @@ if ($doc !== null && $effectiveMmu === 'EXTENDABLE_EMU_MMU3') {
     }
 }
 
-$confidence += gate('s2_parse', 'Configuration files parse cleanly', 10, $doc !== null && $docAdv !== null,
+$confidence += gate('s2_parse', 'Configuration files parse cleanly', 5, $doc !== null && $docAdv !== null,
     $doc === null ? 'Configuration.h unreadable' : ($docAdv === null ? 'Configuration_adv.h unreadable' : ''));
 
 $mbOk = false;

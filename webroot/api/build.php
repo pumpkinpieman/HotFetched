@@ -46,7 +46,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         exit('Artifact not available');
     }
     $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$b['pname']);
-    $dlName = $safeName . '-build' . $b['id'] . '-' . $target[0];
+    $dlName = $type === 'firmware'
+    ? 'firmware.bin'
+    : $safeName . '-build' . $b['id'] . '-' . $target[0];
     header('Content-Type: ' . $target[1]);
     header('Content-Disposition: attachment; filename="' . $dlName . '"');
     header('Content-Length: ' . (string)filesize($file));

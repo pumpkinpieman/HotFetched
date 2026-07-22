@@ -32,20 +32,57 @@
   },
   "marlin": {
     "motherboard": "BOARD_MELZI_CREALITY",
-    "serial_ports": [0, -1],
-    "driver_slots": ["X", "Y", "Z", "E0"],
-    "valid_drivers": ["A4988", "DRV8825"],
+    "serial_ports": [
+      0,
+      -1
+    ],
+    "driver_slots": [
+      "X",
+      "Y",
+      "Z",
+      "E0"
+    ],
+    "valid_drivers": [
+      "A4988",
+      "DRV8825"
+    ],
     "onboard_uart_drivers": false,
     "max_extruders": 1,
     "screens": [
-      { "id": "none", "label": "None / headless", "type": "none" },
-      { "id": "CR10_STOCKDISPLAY", "label": "Creality CR-10 stock display (12864)", "type": "mono128x64" },
-      { "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER", "label": "RepRap Discount Full Graphic 12864", "type": "mono128x64" }
+      {
+        "id": "none",
+        "label": "None / headless",
+        "type": "none"
+      },
+      {
+        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
+        "label": "RepRapDiscount Smart Controller (20x4 character LCD)",
+        "type": "char20x4"
+      },
+      {
+        "id": "CR10_STOCKDISPLAY",
+        "label": "Creality CR-10 stock display (12864)",
+        "type": "mono128x64"
+      },
+      {
+        "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
+        "label": "RepRap Discount Full Graphic 12864",
+        "type": "mono128x64"
+      }
     ],
     "probes": [
-      { "id": "none", "label": "None (manual leveling)" },
-      { "id": "bltouch", "label": "BLTouch / CR-Touch" },
-      { "id": "probe", "label": "Fixed / inductive probe" }
+      {
+        "id": "none",
+        "label": "None (manual leveling)"
+      },
+      {
+        "id": "bltouch",
+        "label": "BLTouch / CR-Touch"
+      },
+      {
+        "id": "probe",
+        "label": "Fixed / inductive probe"
+      }
     ],
     "flash_note": "Flash out/firmware.hex via avrdude over USB. Creality Melzi ships an Optiboot bootloader (env melzi_optiboot) - no SD flashing on this board."
   },

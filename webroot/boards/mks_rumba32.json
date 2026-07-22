@@ -47,6 +47,11 @@
         "type": "none"
       },
       {
+        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
+        "label": "RepRapDiscount Smart Controller (20x4 character LCD)",
+        "type": "char20x4"
+      },
+      {
         "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
         "label": "RepRap Discount Full Graphic 12864",
         "type": "mono128x64"
@@ -73,13 +78,13 @@
       },
       {
         "id": "btt_tft_marlin_mode",
-        "label": "BTT TFT35/TFT70 (Marlin mode + touch \u2014 EXP1/EXP2 wired)",
+        "label": "BTT TFT35/TFT70 (Marlin mode + touch — EXP1/EXP2 wired)",
         "type": "marlinui_tft",
         "define": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER"
       },
       {
         "id": "btt_serial_tft",
-        "label": "BTT TFT35/TFT70 (touch mode only \u2014 no Marlin menus/beeper)",
+        "label": "BTT TFT35/TFT70 (touch mode only — no Marlin menus/beeper)",
         "type": "serial_tft"
       }
     ],

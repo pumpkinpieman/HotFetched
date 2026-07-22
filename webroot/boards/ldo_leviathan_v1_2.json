@@ -46,6 +46,11 @@
         "type": "none"
       },
       {
+        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
+        "label": "RepRapDiscount Smart Controller (20x4 character LCD)",
+        "type": "char20x4"
+      },
+      {
         "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
         "label": "RepRap Discount Full Graphic 12864",
         "type": "mono128x64"
@@ -72,13 +77,13 @@
       },
       {
         "id": "btt_tft_marlin_mode",
-        "label": "BTT TFT35/TFT70 (Marlin mode + touch \u2014 EXP1/EXP2 wired)",
+        "label": "BTT TFT35/TFT70 (Marlin mode + touch — EXP1/EXP2 wired)",
         "type": "marlinui_tft",
         "define": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER"
       },
       {
         "id": "btt_serial_tft",
-        "label": "BTT TFT35/TFT70 (touch mode only \u2014 no Marlin menus/beeper)",
+        "label": "BTT TFT35/TFT70 (touch mode only — no Marlin menus/beeper)",
         "type": "serial_tft"
       }
     ],
@@ -152,8 +157,8 @@
     "mach": "CONFIG_MACH_STM32F446",
     "artifact": "klipper.bin"
   },
-  "min_marlin": "\u2014",
-  "note": "Voron-specific integrated board (5x TMC2209 + 2x TMC5160 onboard, RPi mount). Klipper only \u2014 Marlin has no board definition for it (LDO lists Marlin as TBD). The generic config assumes a Voron CoreXY; adjust steppers/limits for your machine. V1.3 uses an STM32H743 and needs a different config not yet shipped upstream.",
+  "min_marlin": "—",
+  "note": "Voron-specific integrated board (5x TMC2209 + 2x TMC5160 onboard, RPi mount). Klipper only — Marlin has no board definition for it (LDO lists Marlin as TBD). The generic config assumes a Voron CoreXY; adjust steppers/limits for your machine. V1.3 uses an STM32H743 and needs a different config not yet shipped upstream.",
   "limits": {
     "max_bed_x": 400,
     "max_bed_y": 400,
