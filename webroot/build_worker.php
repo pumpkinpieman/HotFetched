@@ -9,7 +9,7 @@ declare(strict_types=1);
  *   Stage 1 (40) — static validation of saved configuration
  *   Stage 2 (20) — Configuration.h / _adv.h parse + board integrity
  *   Stage 3 (40) — real PlatformIO compile; firmware.bin produced
- *   HotFetched v3.7.7 direct UI/layout package
+ *   HotFetched v3.7.9 direct UI/layout package
  * 100 means the firmware actually compiled.
  */
 

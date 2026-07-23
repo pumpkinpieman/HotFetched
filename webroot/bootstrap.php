@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.7.7';
+const HF_VERSION = '3.7.9';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -997,6 +997,9 @@ function marlin_field_defs_extended(array $board): array
     $fields = [
         ['key' => 'screen', 'label' => 'Screen / display', 'group' => 'Display',
          'type' => 'select', 'options' => $screenIds, 'option_labels' => $screenLabels],
+        ['key' => 'lcd_menu_timeout_sec', 'label' => 'LCD menu return timeout (seconds)', 'group' => 'Interface',
+         'type' => 'int', 'min' => 1, 'max' => 3600,
+         'hint' => 'Enter the idle time manually. After this many seconds Marlin returns from a menu to the main status screen.'],
 
         ['key' => 'show_bootscreen', 'label' => 'Show boot screen on startup', 'group' => 'Boot & Display Images', 'type' => 'bool'],
         ['key' => 'boot_logo_size', 'label' => 'Marlin boot logo', 'group' => 'Boot & Display Images', 'type' => 'select',
@@ -2767,6 +2770,8 @@ function marlin_current_values_tier4(array $adv): array
             $bl[$i] = $x;
         }
     }
+    $lcdTimeoutMs = max(1000, (int)$num('LCD_TIMEOUT_TO_STATUS', '60000'));
+
     // FTM_DEFAULT_SHAPER_X is 'ftMotionShaper_ZV' etc.
     $shaper = function (string $k) use ($a): string {
         $raw = (string)($a[$k]['value'] ?? '');
@@ -2774,6 +2779,7 @@ function marlin_current_values_tier4(array $adv): array
     };
 
     return [
+        'lcd_menu_timeout_sec' => (string)max(1, min(3600, (int)round($lcdTimeoutMs / 1000))),
         's_curve'             => $on('S_CURVE_ACCELERATION'),
         'step_smoothing'      => $on('ADAPTIVE_STEP_SMOOTHING'),
         'backlash'            => $on('BACKLASH_COMPENSATION'),
@@ -2812,6 +2818,11 @@ function marlin_apply_values_tier4_adv(array &$adv, array $v): array
     };
     $keep = fn (string $k): ?string => $adv['defines'][$k]['value'] ?? null;
     $f    = fn ($x, int $dp = 2): string => rtrim(rtrim(sprintf('%.' . $dp . 'f', (float)$x), '0'), '.') ?: '0';
+
+    // Return from LCD sub-menus to the status screen after this idle period.
+    // Marlin stores LCD_TIMEOUT_TO_STATUS in milliseconds.
+    $lcdTimeoutSec = max(1, min(3600, (int)($v['lcd_menu_timeout_sec'] ?? 60)));
+    $set('LCD_TIMEOUT_TO_STATUS', (string)($lcdTimeoutSec * 1000));
 
     $set('S_CURVE_ACCELERATION', $keep('S_CURVE_ACCELERATION'), ($v['s_curve'] ?? '0') === '1');
     $set('ADAPTIVE_STEP_SMOOTHING', $keep('ADAPTIVE_STEP_SMOOTHING'), ($v['step_smoothing'] ?? '0') === '1');
