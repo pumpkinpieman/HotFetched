@@ -1,0 +1,10 @@
+function,mcu_signal,mcu_pin,pcb_pad_or_connector,continuity_verified,voltage_verified,evidence_state,notes
+SWD clock,GPIO48/TCK/SWCK,70,,,no,documented MCU pin only,
+SWD data,GPIO49/TMS/SWD,71,,,no,documented MCU pin only,
+Reset,XRSTn,68,,,no,documented MCU pin only,
+JTAG reset / debug enable,TRSTn,69,,,no,documented MCU pin only,
+Boot,GPIO47/BOOT,67,,,no,documented MCU pin only,
+ISP UART TX,GPIO44,64,,,no,documented package behavior,
+ISP UART RX,GPIO45,65,,,no,documented package behavior,
+Ground,DVSS,multiple,,,no,documented MCU pins,
+Target reference,DVDD,multiple,,,no,documented 3.3 V supply,

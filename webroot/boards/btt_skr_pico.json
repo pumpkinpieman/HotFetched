@@ -42,11 +42,6 @@
         "id": "none",
         "label": "No display",
         "type": "none"
-      },
-      {
-        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
-        "label": "RepRapDiscount Smart Controller (20x4 character LCD)",
-        "type": "char20x4"
       }
     ],
     "probes": [

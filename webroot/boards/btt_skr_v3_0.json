@@ -13,9 +13,12 @@
     {
       "id": "STM32H723VG",
       "label": "STM32H723VGT6 (550 MHz, 1 MB flash)",
-      "marlin_env": "STM32H723VG_btt",
+      "marlin_env": "STM32H723Vx_btt",
       "klipper_mcu": "stm32h723xx",
-      "klipper_mach": "CONFIG_MACH_STM32H723"
+      "klipper_mach": "CONFIG_MACH_STM32H723",
+      "marlin_env_aliases": [
+        "STM32H723VG_btt"
+      ]
     }
   ],
   "marlin": {

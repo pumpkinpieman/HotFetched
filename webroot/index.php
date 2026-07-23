@@ -31,6 +31,21 @@ $boards = board_defs();
 </header>
 
 <main class="wrap">
+<!-- HOTFETCHED_A1MINI_BEGIN -->
+<section class="panel">
+  <div style="display:flex;gap:18px;align-items:center;justify-content:space-between;flex-wrap:wrap">
+    <div>
+      <h2 style="margin-bottom:6px">Bambu Lab A1 Mini Offline Firmware</h2>
+      <p class="hint" style="margin:0;max-width:780px">
+        Validate an official N1 package, stage it to an SD card through the local
+        Windows agent, monitor the touchscreen installation, and verify OTA,
+        AP05, MC02, and TH03 afterward.
+      </p>
+    </div>
+    <a class="btn primary" href="a1mini.php">Open A1 Mini SD Assistant</a>
+  </div>
+</section>
+<!-- HOTFETCHED_A1MINI_END -->
     <section class="panel">
         <h2>New Project</h2>
         <form id="createForm" autocomplete="off">

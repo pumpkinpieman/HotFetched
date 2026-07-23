@@ -5,7 +5,7 @@
   "mcu_variants": [
     {
       "id": "ATmega1284P_stock_optimized",
-      "label": "ATmega1284P — stock Melzi bootloader, size-optimized (recommended)",
+      "label": "ATmega1284P \u2014 stock Melzi bootloader, size-optimized (recommended)",
       "marlin_env": "melzi_optimized",
       "marlin_artifact": "firmware.hex",
       "artifact_format": "Intel HEX",
@@ -25,7 +25,7 @@
     },
     {
       "id": "ATmega1284P_stock",
-      "label": "ATmega1284P — stock Melzi bootloader, standard build",
+      "label": "ATmega1284P \u2014 stock Melzi bootloader, standard build",
       "marlin_env": "melzi",
       "marlin_artifact": "firmware.hex",
       "artifact_format": "Intel HEX",
@@ -45,7 +45,7 @@
     },
     {
       "id": "ATmega1284P_optiboot_optimized",
-      "label": "ATmega1284P — Optiboot, size-optimized",
+      "label": "ATmega1284P \u2014 Optiboot, size-optimized",
       "marlin_env": "melzi_optiboot_optimized",
       "marlin_artifact": "firmware.hex",
       "artifact_format": "Intel HEX",
@@ -65,7 +65,7 @@
     },
     {
       "id": "ATmega1284P_optiboot",
-      "label": "ATmega1284P — Optiboot, standard build",
+      "label": "ATmega1284P \u2014 Optiboot, standard build",
       "marlin_env": "melzi_optiboot",
       "marlin_artifact": "firmware.hex",
       "artifact_format": "Intel HEX",
@@ -116,11 +116,6 @@
         "type": "none"
       },
       {
-        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
-        "label": "RepRapDiscount Smart Controller (20x4 character LCD)",
-        "type": "char20x4"
-      },
-      {
         "id": "CR10_STOCKDISPLAY",
         "label": "Creality CR-10 / Ender stock 12864 display",
         "type": "mono128x64"
@@ -141,7 +136,7 @@
       },
       {
         "id": "bltouch_pin27_zmin",
-        "label": "BLTouch / CR Touch — pin-27 adapter; probe signal on Z-min",
+        "label": "BLTouch / CR Touch \u2014 pin-27 adapter; probe signal on Z-min",
         "enable": [
           "BLTOUCH",
           "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",

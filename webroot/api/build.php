@@ -1,56 +1,105 @@
 <?php
+
 declare(strict_types=1);
 
 require __DIR__ . '/../bootstrap.php';
 
-/* ------------------------------------------------ GET: artifact download */
+/**
+ * Return a safe browser download name while preserving the real firmware
+ * extension (.hex, .bin, .uf2, .elf, and so on).
+ */
+function hf_download_name(string $projectName, int $buildId, string $artifactName): string
+{
+    $safeProject = preg_replace('/[^A-Za-z0-9._-]+/', '_', trim($projectName)) ?: 'HotFetched';
+    $safeArtifact = preg_replace('/[^A-Za-z0-9._-]+/', '_', basename($artifactName)) ?: 'firmware.bin';
+    return $safeProject . '-build' . $buildId . '-' . $safeArtifact;
+}
 
+/**
+ * Firmware MIME selection. Intel HEX remains an opaque download instead of
+ * text/plain so browsers and proxies do not append .txt or transform content.
+ */
+function hf_artifact_mime(string $filename): string
+{
+    return match (strtolower(pathinfo($filename, PATHINFO_EXTENSION))) {
+        'zip' => 'application/zip',
+        'log', 'txt' => 'text/plain; charset=utf-8',
+        'hex' => 'application/octet-stream',
+        'bin', 'uf2', 'elf' => 'application/octet-stream',
+        default => 'application/octet-stream',
+    };
+}
+
+/* ------------------------------------------------ GET: artifact download */
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
-    $id   = filter_var($_GET['download'] ?? null, FILTER_VALIDATE_INT);
+    $id = filter_var($_GET['download'] ?? null, FILTER_VALIDATE_INT);
     $type = (string)($_GET['type'] ?? 'firmware');
+
     if ($id === false || $id === null || $id < 1) {
         http_response_code(400);
         exit('Invalid build id');
     }
-    $stmt = db()->prepare('SELECT b.*, p.name AS pname, p.id AS pid FROM builds b JOIN projects p ON p.id = b.project_id WHERE b.id = ?');
+
+    $stmt = db()->prepare(
+        'SELECT b.*, p.name AS pname, p.id AS pid '
+        . 'FROM builds b JOIN projects p ON p.id = b.project_id WHERE b.id = ?'
+    );
     $stmt->execute([$id]);
-    $b = $stmt->fetch();
-    if (!$b) {
+    $build = $stmt->fetch();
+    if (!$build) {
         http_response_code(404);
         exit('Build not found');
     }
-    $dir = realpath(build_dir((int)$b['pid'], (int)$b['id']));
+
+    $dir = realpath(build_dir((int)$build['pid'], (int)$build['id']));
     if ($dir === false) {
         http_response_code(404);
-        exit('Not found');
+        exit('Build directory not found');
     }
-    // Firmware artifact keeps its real name (.bin/.uf2/.elf); resolve from the
-    // stored artifact_path. Config/log are fixed names.
+
     if ($type === 'firmware') {
-        $artifactName = is_string($b['artifact_path']) ? basename($b['artifact_path']) : 'firmware.bin';
-        $target = [$artifactName, 'application/octet-stream'];
+        $storedPath = is_string($build['artifact_path']) ? $build['artifact_path'] : '';
+        $artifactName = $storedPath !== '' ? basename($storedPath) : 'firmware.bin';
+        $candidate = $storedPath !== '' ? realpath($storedPath) : false;
+
+        // Older rows may contain a relative/stale artifact_path. Fall back to
+        // resolving the real filename inside this build directory.
+        if ($candidate === false) {
+            $candidate = realpath($dir . '/' . $artifactName);
+        }
+        $file = $candidate;
+        $mime = hf_artifact_mime($artifactName);
     } else {
         $map = [
             'config' => ['config-bundle.zip', 'application/zip'],
-            'log'    => ['build.log', 'text/plain'],
+            'log'    => ['build.log', 'text/plain; charset=utf-8'],
         ];
         if (!isset($map[$type])) {
             http_response_code(404);
-            exit('Not found');
+            exit('Artifact type not found');
         }
-        $target = $map[$type];
+        [$artifactName, $mime] = $map[$type];
+        $file = realpath($dir . '/' . $artifactName);
     }
-    $file = realpath($dir . '/' . $target[0]);
-    if ($file === false || !str_starts_with($file, $dir)) {
+
+    if ($file === false || !is_file($file) || !str_starts_with($file, $dir . DIRECTORY_SEPARATOR)) {
         http_response_code(404);
         exit('Artifact not available');
     }
-    $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$b['pname']);
-    $dlName = $type === 'firmware'
-    ? 'firmware.bin'
-    : $safeName . '-build' . $b['id'] . '-' . $target[0];
-    header('Content-Type: ' . $target[1]);
-    header('Content-Disposition: attachment; filename="' . $dlName . '"');
+
+    $downloadName = hf_download_name((string)$build['pname'], (int)$build['id'], $artifactName);
+    $encodedName = rawurlencode($downloadName);
+
+    // Prevent stale output, MIME guessing, compression, or proxy transforms.
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: ' . $mime);
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Transfer-Encoding: binary');
+    header('Cache-Control: private, no-store, no-cache, must-revalidate, no-transform');
+    header('Pragma: no-cache');
+    header('Content-Disposition: attachment; filename="' . $downloadName . '"; filename*=UTF-8\'\'' . $encodedName);
     header('Content-Length: ' . (string)filesize($file));
     readfile($file);
     exit;
@@ -66,38 +115,42 @@ if (!is_array($body)) {
 }
 
 csrf_verify($body['csrf'] ?? null);
-
 builds_sweep_stale();
-
 $action = (string)($body['action'] ?? '');
 
 switch ($action) {
-
     case 'start': {
-        $pid = filter_var($body['project_id'] ?? null, FILTER_VALIDATE_INT);
-        if ($pid === false || $pid === null || $pid < 1) {
+        $projectId = filter_var($body['project_id'] ?? null, FILTER_VALIDATE_INT);
+        if ($projectId === false || $projectId === null || $projectId < 1) {
             json_out(['ok' => false, 'error' => 'Invalid project id'], 422);
         }
-        $p = project_get($pid);
-        if ($p === null) {
+
+        $project = project_get($projectId);
+        if ($project === null) {
             json_out(['ok' => false, 'error' => 'Project not found'], 404);
         }
-        // RRF has no source tree to import — its firmware is prebuilt upstream.
-        if ($p['firmware'] !== 'reprap' && $p['source_state'] !== 'ready') {
+
+        if ($project['firmware'] !== 'reprap' && $project['source_state'] !== 'ready') {
             json_out(['ok' => false, 'error' => 'Import a firmware source first'], 409);
         }
-        $stmt = db()->prepare("SELECT COUNT(*) AS c FROM builds WHERE project_id = ? AND status IN ('queued','validating','building')");
-        $stmt->execute([$pid]);
+
+        $stmt = db()->prepare(
+            "SELECT COUNT(*) AS c FROM builds WHERE project_id = ? "
+            . "AND status IN ('queued','validating','building')"
+        );
+        $stmt->execute([$projectId]);
         if ((int)$stmt->fetch()['c'] > 0) {
             json_out(['ok' => false, 'error' => 'A build is already running for this project'], 409);
         }
+
         $stmt = db()->prepare('SELECT COUNT(*) AS c FROM config_values WHERE project_id = ?');
-        $stmt->execute([$pid]);
+        $stmt->execute([$projectId]);
         if ((int)$stmt->fetch()['c'] === 0) {
             json_out(['ok' => false, 'error' => 'Submit the Configuration form before building'], 409);
         }
 
-        db()->prepare("INSERT INTO builds (project_id, started_at) VALUES (?, datetime('now'))")->execute([$pid]);
+        db()->prepare("INSERT INTO builds (project_id, started_at) VALUES (?, datetime('now'))")
+            ->execute([$projectId]);
         $buildId = (int)db()->lastInsertId();
 
         $php = '/usr/local/bin/php';
@@ -105,28 +158,33 @@ switch ($action) {
             $php = trim((string)shell_exec('command -v php')) ?: PHP_BINARY;
         }
         $script = dirname(__DIR__) . '/build_worker.php';
-        shell_exec(sprintf('setsid nohup %s %s %d < /dev/null > /dev/null 2>&1 &',
-            escapeshellarg($php), escapeshellarg($script), $buildId));
+        shell_exec(sprintf(
+            'setsid nohup %s %s %d < /dev/null > /dev/null 2>&1 &',
+            escapeshellarg($php),
+            escapeshellarg($script),
+            $buildId
+        ));
 
         json_out(['ok' => true, 'build_id' => $buildId]);
     }
 
     case 'status': {
-        $id = filter_var($body['build_id'] ?? null, FILTER_VALIDATE_INT);
-        if ($id === false || $id === null || $id < 1) {
+        $buildId = filter_var($body['build_id'] ?? null, FILTER_VALIDATE_INT);
+        if ($buildId === false || $buildId === null || $buildId < 1) {
             json_out(['ok' => false, 'error' => 'Invalid build id'], 422);
         }
+
         $stmt = db()->prepare('SELECT * FROM builds WHERE id = ?');
-        $stmt->execute([$id]);
-        $b = $stmt->fetch();
-        if (!$b) {
+        $stmt->execute([$buildId]);
+        $build = $stmt->fetch();
+        if (!$build) {
             json_out(['ok' => false, 'error' => 'Build not found'], 404);
         }
 
         $tail = '';
-        if (is_string($b['log_path']) && is_file($b['log_path'])) {
-            $size = filesize($b['log_path']) ?: 0;
-            $fh = @fopen($b['log_path'], 'rb');
+        if (is_string($build['log_path']) && is_file($build['log_path'])) {
+            $size = filesize($build['log_path']) ?: 0;
+            $fh = @fopen($build['log_path'], 'rb');
             if ($fh !== false) {
                 if ($size > 6144) {
                     fseek($fh, -6144, SEEK_END);
@@ -136,54 +194,62 @@ switch ($action) {
             }
         }
 
-        // Board-specific flashing guidance for the success banner.
-        $flashNote = '';
         $artifactName = 'firmware.bin';
-        $proj = project_get((int)$b['project_id']);
-        if ($proj !== null) {
-            $bd = board_def((string)$proj['board_id']);
-            if ($bd !== null) {
-                if ($proj['firmware'] === 'reprap') {
-                    $flashNote = 'Copy firmware.bin to the SD card root and config.g into /sys on the same card, then power-cycle.';
-                    $artifactName = 'firmware.bin';
-                } elseif ($proj['firmware'] === 'klipper' && isset($bd['klipper'])) {
-                    $flashNote = (string)($bd['klipper']['flash_note'] ?? '');
-                    $artifactName = (string)($bd['klipper']['artifact'] ?? 'klipper.bin');
-                } elseif ($proj['firmware'] === 'marlin') {
-                    $flashNote = (string)($bd['marlin']['flash_note'] ?? 'Copy the firmware to the SD card and reset the board to flash.');
-                    $artifactName = 'firmware.bin';
-                }
-            }
+        if (is_string($build['artifact_path']) && $build['artifact_path'] !== '') {
+            $artifactName = basename($build['artifact_path']);
         }
-        if (is_string($b['artifact_path']) && $b['artifact_path'] !== '') {
-            $artifactName = basename($b['artifact_path']);
+
+        $flashNote = '';
+        $project = project_get((int)$build['project_id']);
+        if ($project !== null) {
+            $board = board_def((string)$project['board_id']);
+            $variant = $board !== null
+                ? board_mcu_variant($board, (string)($project['mcu_variant'] ?? ''))
+                : null;
+
+            if (is_array($variant) && !empty($variant['flash_note'])) {
+                $flashNote = (string)$variant['flash_note'];
+            } elseif ($project['firmware'] === 'reprap') {
+                $flashNote = 'Copy firmware.bin to the SD card root and config.g into /sys, then power-cycle.';
+            } elseif ($project['firmware'] === 'klipper' && is_array($board['klipper'] ?? null)) {
+                $flashNote = (string)($board['klipper']['flash_note'] ?? '');
+            } elseif ($project['firmware'] === 'marlin') {
+                $flashNote = strtolower(pathinfo($artifactName, PATHINFO_EXTENSION)) === 'hex'
+                    ? 'Flash ' . $artifactName . ' over USB serial with avrdude. Do not rename it to firmware.bin.'
+                    : 'Flash ' . $artifactName . ' using the board-specific method.';
+            }
         }
 
         json_out([
-            'ok'         => true,
-            'status'     => $b['status'],
-            'confidence' => $b['confidence'] !== null ? (int)$b['confidence'] : null,
-            'gates'      => $b['gate_json'] !== null ? json_decode((string)$b['gate_json'], true) : [],
-            'log_tail'   => $tail,
-            'started_at' => $b['started_at'],
-            'finished_at'=> $b['finished_at'],
-            'flash_note' => $flashNote,
+            'ok'            => true,
+            'status'        => $build['status'],
+            'confidence'    => $build['confidence'] !== null ? (int)$build['confidence'] : null,
+            'gates'         => $build['gate_json'] !== null
+                ? json_decode((string)$build['gate_json'], true)
+                : [],
+            'log_tail'      => $tail,
+            'started_at'    => $build['started_at'],
+            'finished_at'   => $build['finished_at'],
+            'flash_note'    => $flashNote,
             'artifact_name' => $artifactName,
-            'artifacts'  => [
-                'firmware' => $b['status'] === 'success' && $b['artifact_path'] !== null,
-                'config'   => $b['status'] === 'success',
-                'log'      => $b['log_path'] !== null,
+            'artifacts'     => [
+                'firmware' => $build['status'] === 'success' && $build['artifact_path'] !== null,
+                'config'   => $build['status'] === 'success',
+                'log'      => $build['log_path'] !== null,
             ],
         ]);
     }
 
     case 'list': {
-        $pid = filter_var($body['project_id'] ?? null, FILTER_VALIDATE_INT);
-        if ($pid === false || $pid === null || $pid < 1) {
+        $projectId = filter_var($body['project_id'] ?? null, FILTER_VALIDATE_INT);
+        if ($projectId === false || $projectId === null || $projectId < 1) {
             json_out(['ok' => false, 'error' => 'Invalid project id'], 422);
         }
-        $stmt = db()->prepare('SELECT id, status, confidence, started_at, finished_at FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 25');
-        $stmt->execute([$pid]);
+        $stmt = db()->prepare(
+            'SELECT id, status, confidence, started_at, finished_at '
+            . 'FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 25'
+        );
+        $stmt->execute([$projectId]);
         json_out(['ok' => true, 'builds' => $stmt->fetchAll()]);
     }
 

@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.6.2';
+const HF_VERSION = '3.7.7';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -51,6 +51,51 @@ function json_out(array $payload, int $code = 200): never
 }
 
 function h(?string $s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+
+/**
+ * Upgrade the GitHub tag / branch field on project.php to a source-version
+ * dropdown without changing the ZIP upload card or its behavior.
+ *
+ * Keeping this small transform in bootstrap means the enhancement applies to
+ * the existing project page without duplicating that large page template.
+ */
+function hf_project_source_versions_ui(string $html): string
+{
+    $html = preg_replace(
+        '#<input\s+type="text"\s+id="ghRef"\s+placeholder="[^"]*"\s*>#i',
+        '<select id="ghRef" disabled><option value="">Loading available versions…</option></select>'
+        . '<span class="hint" id="ghRefStatus">Reading tags and branches from GitHub…</span>',
+        $html,
+        1
+    ) ?? $html;
+
+    $html = str_replace(
+        'Tag / branch <span class="hint">(blank = default branch)</span>',
+        'Version / branch <span class="hint">(official tags and branches)</span>',
+        $html
+    );
+
+    if (!str_contains($html, 'source_versions.js')) {
+        $script = '<script src="source_versions.js?v=' . rawurlencode(HF_VERSION) . '"></script>';
+        $html = preg_replace('#</body>#i', $script . "\n</body>", $html, 1) ?? ($html . $script);
+    }
+
+    if (!str_contains($html, 'hotfetched_audio_fix.js')) {
+        $script = '<script src="hotfetched_audio_fix.js?v=' . rawurlencode(HF_VERSION) . '"></script>';
+        $html = preg_replace('#</body>#i', $script . "\n</body>", $html, 1) ?? ($html . $script);
+    }
+
+    return $html;
+}
+
+if (
+    PHP_SAPI !== 'cli'
+    && basename((string)($_SERVER['SCRIPT_NAME'] ?? '')) === 'project.php'
+    && strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'GET'
+) {
+    ob_start('hf_project_source_versions_ui');
+}
 
 /* ---------------------------------------------------------------- DB */
 
@@ -674,6 +719,16 @@ function marlin_field_defs(array $board): array
         ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine',
          'type' => 'text', 'maxlen' => 40],
 
+        ['key' => 'serial_baud', 'label' => 'Printer / TFT serial baud rate', 'group' => 'Interface',
+         'type' => 'select',
+         'options' => ['2400', '9600', '19200', '38400', '57600', '115200', '250000', '500000', '1000000'],
+         'option_labels' => [
+             '2400' => '2400', '9600' => '9600', '19200' => '19200', '38400' => '38400',
+             '57600' => '57600', '115200' => '115200', '250000' => '250000 (Marlin default)',
+             '500000' => '500000', '1000000' => '1000000',
+         ],
+         'hint' => 'Must match the printer/TFT connection. MMU baud is configured separately.'],
+
         ['key' => 'driver_x',  'label' => 'X stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_y',  'label' => 'Y stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_z',  'label' => 'Z stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
@@ -758,6 +813,7 @@ function marlin_current_values(array $doc): array
 
     return [
         'machine_name' => $mn !== null && $mn['enabled'] ? $strip($mn) : null,
+        'serial_baud' => $num($get('BAUDRATE')) ?? '250000',
         'driver_x'  => $driver($get('X_DRIVER_TYPE')),
         'driver_y'  => $driver($get('Y_DRIVER_TYPE')),
         'driver_z'  => $driver($get('Z_DRIVER_TYPE')),
@@ -798,6 +854,7 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     // Board-locked
     $set('MOTHERBOARD', (string)$board['marlin']['motherboard']);
     $set('SERIAL_PORT', (string)($board['marlin']['serial_ports'][0] ?? 1));
+    $set('BAUDRATE', (string)(int)($v['serial_baud'] ?? 250000));
 
     // Machine
     $name = str_replace('"', '', (string)$v['machine_name']);
@@ -873,17 +930,63 @@ const HF_EVENT_PRESETS = [
     'alarm'      => [[220, 350], [0, 120], [220, 350], [0, 120], [220, 350]],
 ];
 
+/* HotFetched v3.7.2: version-compatible printer power-on melodies. */
+function hf_startup_tune_sequence(array $v): ?array
+{
+    $choice = (string)($v['startup_tune'] ?? 'keep');
+    if ($choice === 'keep') return null;       // Preserve imported configuration.
+    if ($choice === 'silent') return [];       // Explicitly disable startup audio.
+
+    if ($choice === 'custom') {
+        preg_match_all('/-?\d+/', (string)($v['startup_tune_custom'] ?? ''), $m);
+        $nums = array_map('intval', $m[0]);
+    } elseif (isset(HF_TUNE_PRESETS[$choice])) {
+        preg_match_all('/-?\d+/', HF_TUNE_PRESETS[$choice], $m);
+        $nums = array_map('intval', $m[0]);
+    } else {
+        return [];
+    }
+
+    if (count($nums) < 2 || count($nums) % 2 !== 0) return [];
+    $seq = [];
+    for ($i = 0; $i < count($nums); $i += 2) {
+        $freq = $nums[$i];
+        $ms = $nums[$i + 1];
+        if ($freq < 0 || $freq > 20000 || $ms < 1 || $ms > 10000) return [];
+        $seq[] = [$freq, $ms];
+    }
+    return $seq;
+}
+
+function hf_startup_tune_literal(array $seq): string
+{
+    $flat = [];
+    foreach ($seq as [$freq, $ms]) {
+        $flat[] = (string)(int)$freq;
+        $flat[] = (string)(int)$ms;
+    }
+    return '{ ' . implode(', ', $flat) . ' }';
+}
+
+function hf_startup_commands_literal(array $seq): string
+{
+    $commands = [];
+    foreach ($seq as [$freq, $ms]) {
+        $commands[] = (int)$freq === 0
+            ? 'G4 P' . (int)$ms
+            : 'M300 S' . (int)$freq . ' P' . (int)$ms;
+    }
+    // Emit a C string containing \n escapes. Marlin queues each command at boot.
+    return '"' . str_replace('"', '\\"', implode('\\n', $commands)) . '"';
+}
+
 /** Phase-4 field groups, appended to the curated Marlin fields. */
 function marlin_field_defs_extended(array $board): array
 {
     $screens = $board['marlin']['screens'] ?? [];
-    $probes  = $board['marlin']['probes'] ?? [];
 
     $screenIds    = array_column($screens, 'id');
     $screenLabels = array_combine($screenIds, array_column($screens, 'label'));
-    $probeIds     = array_column($probes, 'id');
-    $probeLabels  = array_combine($probeIds, array_column($probes, 'label'));
-    $probeActive  = array_values(array_filter($probeIds, fn ($p) => $p !== 'none'));
 
     $tuneOpts  = array_merge(['keep', 'silent'], array_keys(HF_TUNE_PRESETS), ['custom']);
     $tuneLabels = ['keep' => 'Keep current', 'silent' => 'Silent (no tune)',
@@ -901,30 +1004,19 @@ function marlin_field_defs_extended(array $board): array
          'option_labels' => ['full' => 'Full Marlin logo', 'small' => 'Small logo (saves flash)', 'animated' => 'Animated logo (~3KB flash)'],
          'requires' => ['show_bootscreen' => ['1']]],
         ['key' => 'custom_status_image', 'label' => 'Enable custom status screen image', 'group' => 'Boot & Display Images', 'type' => 'bool'],
-
-        ['key' => 'probe', 'label' => 'Bed probe', 'group' => 'Probe',
-         'type' => 'select', 'options' => $probeIds, 'option_labels' => $probeLabels],
-        ['key' => 'probe_off_x', 'label' => 'Probe offset X (mm)', 'group' => 'Probe',
-         'type' => 'float', 'min' => -100, 'max' => 100, 'requires' => ['probe' => $probeActive]],
-        ['key' => 'probe_off_y', 'label' => 'Probe offset Y (mm)', 'group' => 'Probe',
-         'type' => 'float', 'min' => -100, 'max' => 100, 'requires' => ['probe' => $probeActive]],
-        ['key' => 'probe_off_z', 'label' => 'Probe offset Z (mm)', 'group' => 'Probe',
-         'type' => 'float', 'min' => -10, 'max' => 10, 'requires' => ['probe' => $probeActive]],
-
     ];
 
-    // Audio only exists if the board actually has a beeper (it normally lives on
-    // the LCD's EXP header). Boards without one - e.g. the SKR Pico - get no
-    // audio fields at all, rather than settings that cannot compile.
+    // Audio belongs immediately below Boot & Display Images.
     if ($board['ui']['beeper'] ?? true) {
         $fields[] = ['key' => 'speaker', 'label' => 'Speaker fitted (SPEAKER — piezo tones)', 'group' => 'Audio', 'type' => 'bool'];
-        $fields[] = ['key' => 'startup_tune', 'label' => 'Power-on tune (STARTUP_TUNE)', 'group' => 'Audio',
+        $fields[] = ['key' => 'startup_tune', 'label' => 'Printer powered on tune (firmware)', 'group' => 'Audio',
                      'type' => 'select', 'options' => $tuneOpts, 'option_labels' => $tuneLabels];
         $fields[] = ['key' => 'startup_tune_custom', 'label' => 'Custom tune (freq,ms pairs e.g. 523,120,0,40,784,180)',
                      'group' => 'Audio', 'type' => 'text', 'maxlen' => 2000,
                      'requires' => ['startup_tune' => ['custom']]];
     }
 
+    // Host-triggered sounds follow firmware audio.
     foreach ([
         'ev_print_start' => 'Print start sound',
         'ev_print_pause' => 'Print paused sound',
@@ -938,25 +1030,65 @@ function marlin_field_defs_extended(array $board): array
                      'group' => 'Audio (host events)', 'type' => 'text', 'maxlen' => 2000,
                      'requires' => [$key => ['custom']]];
     }
+
     return $fields;
+}
+
+/** Current values for phase-4 fields from a parsed Configuration.h. */
+function marlin_screen_define(array $screen): ?string
+{
+    $type = (string)($screen['type'] ?? '');
+    if (in_array($type, ['mono128x64', 'char20x4'], true)) {
+        $define = (string)($screen['define'] ?? $screen['id'] ?? '');
+        return $define !== '' ? $define : null;
+    }
+    if ($type === 'marlinui_tft') {
+        $define = (string)($screen['define'] ?? 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER');
+        return $define !== '' ? $define : null;
+    }
+    return null;
 }
 
 /** Current values for phase-4 fields from a parsed Configuration.h. */
 function marlin_current_values_extended(array $doc, array $board): array
 {
     $d = $doc['defines'];
+    $screens = $board['marlin']['screens'] ?? [];
+    $serial2 = (bool)($d['SERIAL_PORT_2']['enabled'] ?? false);
 
+    // Detect combined Marlin-mode + touch TFTs before generic native LCDs.
+    // These options share an emulated 12864 define with a native screen, so
+    // checking native screens first loses the dual-mode selection on reload.
     $screen = 'none';
-    foreach (($board['marlin']['screens'] ?? []) as $s) {
-        $type = (string)($s['type'] ?? '');
-        if (in_array($type, ['mono128x64', 'char20x4'], true)
-            && ($d[$s['id']]['enabled'] ?? false)) {
-            $screen = $s['id'];
-            break;
+    if ($serial2) {
+        foreach ($screens as $s) {
+            if (($s['type'] ?? '') !== 'marlinui_tft') continue;
+            $define = marlin_screen_define($s);
+            if ($define !== null && ($d[$define]['enabled'] ?? false)) {
+                $screen = (string)$s['id'];
+                break;
+            }
         }
     }
-    if ($screen === 'none' && ($d['SERIAL_PORT_2']['enabled'] ?? false)) {
-        $screen = 'btt_serial_tft';
+
+    if ($screen === 'none') {
+        foreach ($screens as $s) {
+            if (!in_array(($s['type'] ?? ''), ['mono128x64', 'char20x4'], true)) continue;
+            $define = marlin_screen_define($s);
+            if ($define !== null && ($d[$define]['enabled'] ?? false)) {
+                $screen = (string)$s['id'];
+                break;
+            }
+        }
+    }
+
+    if ($screen === 'none' && $serial2) {
+        foreach ($screens as $s) {
+            if (($s['type'] ?? '') === 'serial_tft') {
+                $screen = (string)$s['id'];
+                break;
+            }
+        }
     }
 
     $probe = 'none';
@@ -1009,77 +1141,59 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
     };
     $keepValue = fn (string $key): ?string => $doc['defines'][$key]['value'] ?? null;
 
-    // Display: enable the chosen mono screen, disable the others; serial TFT
-    // enables the secondary serial port instead.
-    // A BTT TFT wired to EXP1/EXP2 can run in "Marlin mode", where it emulates a
-    // 12864 controller - that gives real MarlinUI menus and a beeper. The user
-    // flips modes on the panel itself; the firmware just needs the 12864 define
-    // enabled, plus the serial port for touch mode. So the dual-mode option sets
-    // BOTH. Touch-only mode sets just the serial port (no MarlinUI, no beeper).
-    $selScreen = (string)($v['screen'] ?? '');
-    $mono12864 = null;
-    foreach (($board['marlin']['screens'] ?? []) as $s) {
-        $t = (string)($s['type'] ?? '');
-        if (in_array($t, ['mono128x64', 'char20x4'], true)) {
-            $set($s['id'], null, $selScreen === $s['id']);
-            if ($s['id'] === 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER') {
-                $mono12864 = $s['id'];
-            }
-        } elseif ($t === 'marlinui_tft' && $selScreen === $s['id']) {
-            // Emulated 12864: enable the controller define this TFT pretends to be.
-            $def = (string)($s['define'] ?? 'REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER');
-            $set($def, null, true);
-        }
+    // Display: disable every controller represented by the board, then enable
+    // exactly the selected controller. Touch mode uses secondary serial as well.
+    $screens = $board['marlin']['screens'] ?? [];
+    $selScreen = (string)($v['screen'] ?? 'none');
+    $selected = null;
+    $displayDefines = [];
+    foreach ($screens as $s) {
+        if ((string)($s['id'] ?? '') === $selScreen) $selected = $s;
+        $define = marlin_screen_define($s);
+        if ($define !== null) $displayDefines[$define] = true;
     }
-    $isTft = ($selScreen === 'btt_serial_tft' || $selScreen === 'btt_tft_marlin_mode');
+    foreach (array_keys($displayDefines) as $define) {
+        $set($define, $keepValue($define), false);
+    }
+
+    $selectedType = (string)($selected['type'] ?? 'none');
+    $selectedDefine = $selected !== null ? marlin_screen_define($selected) : null;
+    if ($selectedDefine !== null) {
+        $set($selectedDefine, $keepValue($selectedDefine), true);
+    }
+
+    $isTft = in_array($selectedType, ['serial_tft', 'marlinui_tft'], true);
     $set('SERIAL_PORT_2', '-1', $isTft);
+    $set('BAUDRATE_2', (string)(int)($v['serial_baud'] ?? 250000), $isTft);
+
+    // These flags live in Configuration.h, not Configuration_adv.h.
+    // A generated 128x64 bitmap is invalid for an HD44780 20x4 character LCD.
+    $showBoot = ($v['show_bootscreen'] ?? '1') === '1';
+    $bitmapCapable = in_array($selectedType, ['mono128x64', 'marlinui_tft'], true);
+    $set('SHOW_BOOTSCREEN', $keepValue('SHOW_BOOTSCREEN'), $showBoot);
+    $customBootWasEnabled = (bool)($doc['defines']['SHOW_CUSTOM_BOOTSCREEN']['enabled'] ?? false);
+    $set('SHOW_CUSTOM_BOOTSCREEN', $keepValue('SHOW_CUSTOM_BOOTSCREEN'),
+         $showBoot && $bitmapCapable && $customBootWasEnabled);
+    $set('CUSTOM_STATUS_SCREEN_IMAGE', $keepValue('CUSTOM_STATUS_SCREEN_IMAGE'),
+         $bitmapCapable && (($v['custom_status_image'] ?? '0') === '1'));
 
     // Probe
     foreach (($board['marlin']['probes'] ?? []) as $p) {
-        if ($p['id'] !== $v['probe']) {
-            continue;
-        }
-        foreach ($p['enable'] as $k) {
-            $set($k, $keepValue($k), true);
-        }
-        foreach ($p['disable'] as $k) {
-            $set($k, $keepValue($k), false);
-        }
+        if (($p['id'] ?? '') !== ($v['probe'] ?? 'none')) continue;
+        foreach (($p['enable'] ?? []) as $k) $set($k, $keepValue($k), true);
+        foreach (($p['disable'] ?? []) as $k) $set($k, $keepValue($k), false);
     }
-    if ($v['probe'] !== 'none') {
+    if (($v['probe'] ?? 'none') !== 'none') {
         $fmt = fn (string $n): string => rtrim(rtrim(sprintf('%.2f', (float)$n), '0'), '.');
         $set('NOZZLE_TO_PROBE_OFFSET', sprintf('{ %s, %s, %s }',
-            $fmt($v['probe_off_x']), $fmt($v['probe_off_y']), $fmt($v['probe_off_z'])));
+            $fmt((string)$v['probe_off_x']), $fmt((string)$v['probe_off_y']), $fmt((string)$v['probe_off_z'])));
     }
 
-    // Audio. STARTUP_TUNE needs ALL(HAS_BEEPER, SPEAKER) - and BEEPER_PIN comes
-    // from the LCD's EXP header, so it is unavailable without a MarlinUI display.
-    // Force the tune off in that case rather than emitting a config that can't build.
-    // No beeper on the board at all -> never write SPEAKER/STARTUP_TUNE.
+    // SPEAKER is in Configuration.h. The actual power-on sequence is written
+    // by marlin_apply_values_adv() as STARTUP_TUNE or STARTUP_COMMANDS.
     $hasBeeper = (bool)($board['ui']['beeper'] ?? true);
-    $hasUI = $hasBeeper && marlin_screen_has_marlinui($board, (string)($v['screen'] ?? ''));
-    $set('SPEAKER', null, $hasBeeper && (($v['speaker'] ?? '0') === '1'));
-    if (!$hasUI || $v['speaker'] !== '1') {
-        $set('STARTUP_TUNE', $keepValue('STARTUP_TUNE'), false);
-        return $applied;
-    }
-    switch ($v['startup_tune']) {
-        case 'keep':
-            break;
-        case 'silent':
-            $set('STARTUP_TUNE', $keepValue('STARTUP_TUNE'), false);
-            break;
-        case 'custom':
-            $nums = array_map('intval', array_filter(array_map('trim', explode(',', (string)$v['startup_tune_custom'])), 'strlen'));
-            if (count($nums) >= 2 && count($nums) % 2 === 0) {
-                $set('STARTUP_TUNE', '{ ' . implode(', ', $nums) . ' }');
-            }
-            break;
-        default:
-            if (isset(HF_TUNE_PRESETS[$v['startup_tune']])) {
-                $set('STARTUP_TUNE', HF_TUNE_PRESETS[$v['startup_tune']]);
-            }
-    }
+    $hasUI = $hasBeeper && marlin_screen_has_marlinui($board, $selScreen);
+    $set('SPEAKER', null, $hasUI && (($v['speaker'] ?? '0') === '1'));
 
     return $applied;
 }
@@ -1287,7 +1401,7 @@ function marlin_leveling_has_grid(string $mode): bool
 
 function marlin_field_defs_leveling(array $board): array
 {
-    return [
+    $fields = [
         ['key' => 'leveling', 'label' => 'Bed leveling', 'group' => 'Bed Leveling', 'type' => 'select',
          'options' => ['none', 'bilinear', 'ubl', 'linear', '3point', 'mesh'],
          'option_labels' => [
@@ -1317,6 +1431,32 @@ function marlin_field_defs_leveling(array $board): array
         ['key' => 'z_safe_homing', 'label' => 'Z safe homing (home Z at bed center — recommended with a probe)',
          'group' => 'Bed Leveling', 'type' => 'bool'],
     ];
+
+    // Keep the probe controls directly beneath Bed Leveling. They remain a
+    // separate "Probe" group, but are emitted here so later feature groups
+    // (Wi-Fi, MMU, Audio, etc.) can never split them apart.
+    $probes = $board['marlin']['probes'] ?? [];
+    $probeIds = array_column($probes, 'id');
+    $probeLabels = $probeIds !== []
+        ? array_combine($probeIds, array_column($probes, 'label'))
+        : [];
+    $probeActive = array_values(array_filter($probeIds, fn ($p) => $p !== 'none'));
+
+    if ($probeIds !== []) {
+        $fields[] = ['key' => 'probe', 'label' => 'Bed probe', 'group' => 'Probe',
+                     'type' => 'select', 'options' => $probeIds, 'option_labels' => $probeLabels];
+        $fields[] = ['key' => 'probe_off_x', 'label' => 'Probe offset X (mm)', 'group' => 'Probe',
+                     'type' => 'float', 'min' => -100, 'max' => 100,
+                     'requires' => ['probe' => $probeActive]];
+        $fields[] = ['key' => 'probe_off_y', 'label' => 'Probe offset Y (mm)', 'group' => 'Probe',
+                     'type' => 'float', 'min' => -100, 'max' => 100,
+                     'requires' => ['probe' => $probeActive]];
+        $fields[] = ['key' => 'probe_off_z', 'label' => 'Probe offset Z (mm)', 'group' => 'Probe',
+                     'type' => 'float', 'min' => -10, 'max' => 10,
+                     'requires' => ['probe' => $probeActive]];
+    }
+
+    return $fields;
 }
 
 function marlin_current_values_leveling(array $doc): array
@@ -1950,7 +2090,7 @@ function marlin_enable_extendable_mmu3(string $tree): array
 /** Models that require exactly 5 extruders (Prusa 5-port units). */
 function marlin_mmu_needs_5(string $m): bool
 {
-    return in_array($m, ['PRUSA_MMU2S', 'PRUSA_MMU3'], true);
+    return in_array($m, ['PRUSA_MMU2', 'PRUSA_MMU2S', 'PRUSA_MMU3'], true);
 }
 
 /** Models that talk over a serial port (everything except the MMU1 multiplexer). */
@@ -3262,7 +3402,7 @@ function marlin_apply_values_motion(array &$doc, array $v): array
 }
 
 /** Apply Tier-1 values to Configuration_adv.h (TMC block). */
-function marlin_apply_values_adv(array &$adv, array $v): array
+function marlin_apply_values_adv(array &$adv, array $v, array $board = []): array
 {
     $applied = [];
     $set = function (string $key, ?string $value, bool $enable = true) use (&$adv, &$applied): void {
@@ -3286,15 +3426,31 @@ function marlin_apply_values_adv(array &$adv, array $v): array
         $set('Y_STALL_SENSITIVITY', (string)(int)$v['stall_y']);
     }
 
-    // Boot & display images (all in Configuration_adv.h).
+    // Boot-logo size switches live in Configuration_adv.h. The master boot
+    // switch and custom-image switches are handled in Configuration.h above.
     $showBoot = ($v['show_bootscreen'] ?? '1') === '1';
-    $set('SHOW_BOOTSCREEN', $keep('SHOW_BOOTSCREEN'), $showBoot);
-    if ($showBoot) {
-        $logo = $v['boot_logo_size'] ?? 'full';
-        $set('BOOT_MARLIN_LOGO_SMALL', $keep('BOOT_MARLIN_LOGO_SMALL'), $logo === 'small');
-        $set('BOOT_MARLIN_LOGO_ANIMATED', $keep('BOOT_MARLIN_LOGO_ANIMATED'), $logo === 'animated');
+    $logo = (string)($v['boot_logo_size'] ?? 'full');
+    $set('BOOT_MARLIN_LOGO_SMALL', $keep('BOOT_MARLIN_LOGO_SMALL'), $showBoot && $logo === 'small');
+    $set('BOOT_MARLIN_LOGO_ANIMATED', $keep('BOOT_MARLIN_LOGO_ANIMATED'), $showBoot && $logo === 'animated');
+
+    // Printer-powered-on sound. Marlin 2.1.3+ exposes STARTUP_TUNE, while
+    // 2.1.2.x exposes STARTUP_COMMANDS. Select the feature present in the
+    // imported source tree and never enable both at once.
+    $seq = hf_startup_tune_sequence($v);
+    $speakerOn = (($v['speaker'] ?? '0') === '1');
+    $hasUI = $board === [] || marlin_screen_has_marlinui($board, (string)($v['screen'] ?? ''));
+    if ($seq !== null) {
+        if (!$speakerOn || !$hasUI || $seq === []) {
+            $set('STARTUP_TUNE', $keep('STARTUP_TUNE'), false);
+            $set('STARTUP_COMMANDS', $keep('STARTUP_COMMANDS'), false);
+        } elseif (isset($adv['defines']['STARTUP_TUNE'])) {
+            $set('STARTUP_TUNE', hf_startup_tune_literal($seq), true);
+            $set('STARTUP_COMMANDS', $keep('STARTUP_COMMANDS'), false);
+        } elseif (isset($adv['defines']['STARTUP_COMMANDS'])) {
+            $set('STARTUP_COMMANDS', hf_startup_commands_literal($seq), true);
+            $set('STARTUP_TUNE', $keep('STARTUP_TUNE'), false);
+        }
     }
-    $set('CUSTOM_STATUS_SCREEN_IMAGE', $keep('CUSTOM_STATUS_SCREEN_IMAGE'), ($v['custom_status_image'] ?? '0') === '1');
 
     return $applied;
 }

@@ -1,0 +1,156 @@
+{
+  "id": "geeetech_gt2560_rev_a_plus",
+  "name": "Geeetech GT2560 Rev A+ (ATmega2560)",
+  "vendor": "Geeetech",
+  "mcu_variants": [
+    {
+      "id": "ATmega2560",
+      "label": "ATmega2560 (16 MHz, 256 KB flash)",
+      "marlin_env": "mega2560",
+      "marlin_artifact": "firmware.hex",
+      "artifact_format": "Intel HEX",
+      "platformio_board": "megaatmega2560",
+      "bootloader": "Arduino Mega 2560-compatible bootloader (8 KiB application-space reservation)",
+      "upload_protocol": "wiring",
+      "upload_speed": 115200,
+      "max_flash_bytes": 253952,
+      "flash_note": "Flash firmware.hex over the board USB serial connection with avrdude. This board does not use Marlin SD-card firmware updates with its normal bootloader.",
+      "flash_command": "avrdude -p atmega2560 -c wiring -b 115200 -P {PORT} -D -U flash:w:{FIRMWARE}:i",
+      "clock_hz": 16000000,
+      "flash_bytes": 262144,
+      "sram_bytes": 8192,
+      "eeprom_bytes": 4096,
+      "bootloader_bytes": 8192
+    }
+  ],
+  "firmware_support": {
+    "marlin": true,
+    "klipper": false,
+    "reprap": false
+  },
+  "marlin": {
+    "motherboard": "BOARD_GT2560_REV_A_PLUS",
+    "artifact": "firmware.hex",
+    "artifact_format": "Intel HEX",
+    "serial_ports": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "driver_slots": [
+      "X",
+      "Y",
+      "Z",
+      "E0",
+      "E1"
+    ],
+    "valid_drivers": [
+      "A4988",
+      "DRV8825",
+      "TMC2208_STANDALONE",
+      "TMC2209_STANDALONE"
+    ],
+    "onboard_uart_drivers": false,
+    "max_extruders": 2,
+    "screens": [
+      {
+        "id": "none",
+        "label": "None / headless",
+        "type": "none"
+      },
+      {
+        "id": "REPRAP_DISCOUNT_SMART_CONTROLLER",
+        "label": "Geeetech / RepRap 2004 character LCD",
+        "type": "char20x4"
+      },
+      {
+        "id": "REPRAP_DISCOUNT_FULL_GRAPHIC_SMART_CONTROLLER",
+        "label": "Geeetech / RepRap 12864 full graphic LCD",
+        "type": "mono128x64"
+      }
+    ],
+    "probes": [
+      {
+        "id": "none",
+        "label": "No probe (manual leveling)",
+        "enable": [],
+        "disable": [
+          "BLTOUCH",
+          "FIX_MOUNTED_PROBE",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ]
+      },
+      {
+        "id": "bltouch_zmin",
+        "label": "Geeetech 3DTouch / BLTouch (servo pin 11; signal on Z-min)",
+        "enable": [
+          "BLTOUCH",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "FIX_MOUNTED_PROBE"
+        ]
+      },
+      {
+        "id": "fixed_probe_zmin",
+        "label": "Fixed inductive/capacitive probe wired to Z-min",
+        "enable": [
+          "FIX_MOUNTED_PROBE",
+          "Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN",
+          "USE_PROBE_FOR_Z_HOMING",
+          "Z_SAFE_HOMING"
+        ],
+        "disable": [
+          "BLTOUCH"
+        ]
+      }
+    ]
+  },
+  "limits": {
+    "max_bed_x": 2000,
+    "max_bed_y": 2000,
+    "max_z": 2000,
+    "max_hotend_temp": 285,
+    "max_bed_temp": 120,
+    "max_feedrate_xy": 300,
+    "max_feedrate_z": 20
+  },
+  "min_marlin": "1.1.8",
+  "note": "GT2560 Rev A+ uses one ATmega2560 compiler target. FT232RQ and CH340/CH340C are USB-to-serial bridge variants, not alternate firmware MCUs. The board has five plug-in stepper-driver sockets, two physical extruder outputs, three thermistor inputs, and 2004/12864 LCD connections. Klipper MCU support exists for ATmega2560, but HotFetched does not claim board-level Klipper support until a validated GT2560 Rev A+ reference pin configuration is available in the imported source.",
+  "usb_bridges": [
+    {
+      "id": "FT232RQ",
+      "label": "FT232RQ USB-to-serial bridge"
+    },
+    {
+      "id": "CH340_CH340C",
+      "label": "CH340 / CH340C USB-to-serial bridge"
+    }
+  ],
+  "wifi": {
+    "supported": false,
+    "module": null,
+    "note": "No onboard Wi-Fi firmware target. External serial Wi-Fi adapters require manual wiring to an unused UART and run separate firmware."
+  },
+  "rrf": {
+    "supported": false,
+    "asset_include": [],
+    "asset_exclude": [],
+    "docs_url": null,
+    "note": "RepRapFirmware is not supported on this 8-bit AVR target."
+  },
+  "ui": {
+    "lcd": true,
+    "beeper": true,
+    "neopixel": false,
+    "z_steppers": 1
+  },
+  "revisions": [
+    "GT2560 Rev A+"
+  ]
+}

@@ -9,6 +9,7 @@ declare(strict_types=1);
  *   Stage 1 (40) — static validation of saved configuration
  *   Stage 2 (20) — Configuration.h / _adv.h parse + board integrity
  *   Stage 3 (40) — real PlatformIO compile; firmware.bin produced
+ *   HotFetched v3.7.7 direct UI/layout package
  * 100 means the firmware actually compiled.
  */
 
@@ -25,8 +26,214 @@ if ($buildId < 1) {
     exit(1);
 }
 
-// Fatal-error trap: never leave a build frozen if PHP dies mid-run.
+// Worker-only source patches must never leak into later builds. Keep exact
+// in-memory backups and restore them on every normal or abnormal shutdown.
+$GLOBALS['__hf_source_backups'] = [];
+function source_patch_backup(string $path): bool
+{
+    if (isset($GLOBALS['__hf_source_backups'][$path])) return true;
+    $data = @file_get_contents($path);
+    if ($data === false) return false;
+    $GLOBALS['__hf_source_backups'][$path] = [
+        'data' => $data,
+        'mode' => @fileperms($path) & 0777,
+    ];
+    return true;
+}
+function source_patch_restore_all(): void
+{
+    foreach (array_reverse($GLOBALS['__hf_source_backups'], true) as $path => $backup) {
+        if (@file_put_contents($path, $backup['data']) === false) {
+            error_log('[HotFetched] failed to restore worker-patched source: ' . $path);
+            continue;
+        }
+        if (($backup['mode'] ?? 0) > 0) @chmod($path, (int)$backup['mode']);
+    }
+    $GLOBALS['__hf_source_backups'] = [];
+}
+
+
+/** Remove an isolated compiler directory without following symlinks. */
+function build_tree_remove(string $path): bool
+{
+    if (!file_exists($path) && !is_link($path)) return true;
+    if (is_file($path) || is_link($path)) return @unlink($path);
+    try {
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($it as $node) {
+            $node->isDir() && !$node->isLink()
+                ? @rmdir($node->getPathname())
+                : @unlink($node->getPathname());
+        }
+    } catch (Throwable) {
+        return false;
+    }
+    return @rmdir($path);
+}
+
+/** Return every PlatformIO environment declared by an imported Marlin tree. */
+function marlin_environment_names(string $treeRoot): array
+{
+    $files = [];
+    $main = $treeRoot . '/platformio.ini';
+    if (is_file($main)) $files[$main] = true;
+
+    $iniRoot = $treeRoot . '/ini';
+    if (is_dir($iniRoot)) {
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($iniRoot, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($it as $node) {
+                if ($node->isFile() && strtolower($node->getExtension()) === 'ini' && $node->getSize() < 2_000_000) {
+                    $files[$node->getPathname()] = true;
+                }
+            }
+        } catch (Throwable) {
+        }
+    }
+
+    $envs = [];
+    foreach (array_keys($files) as $file) {
+        $text = @file_get_contents($file);
+        if ($text === false) continue;
+        if (preg_match_all('/^\s*\[env:([^\]]+)\]\s*$/mi', $text, $matches)) {
+            foreach ($matches[1] as $env) {
+                $env = trim((string)$env);
+                if ($env !== '') $envs[$env] = true;
+            }
+        }
+    }
+    $out = array_keys($envs);
+    natcasesort($out);
+    return array_values($out);
+}
+
+/** Resolve the board profile's environment against the imported source tree. */
+function marlin_resolve_environment(string $treeRoot, array $variant): array
+{
+    $requested = trim((string)($variant['marlin_env'] ?? ''));
+    $candidates = [$requested];
+    foreach (($variant['marlin_env_aliases'] ?? []) as $alias) {
+        if (is_string($alias) && trim($alias) !== '') $candidates[] = trim($alias);
+    }
+
+    // Compatibility with older HotFetched profiles. The current Marlin name for
+    // the SKR 3 / SKR 3 EZ H723 target is STM32H723Vx_btt.
+    $builtinAliases = [
+        'STM32H723VG_btt' => ['STM32H723Vx_btt'],
+        'STM32H723Vx_btt' => ['STM32H723VG_btt'],
+    ];
+    foreach ($builtinAliases[$requested] ?? [] as $alias) $candidates[] = $alias;
+    $candidates = array_values(array_unique(array_filter($candidates, 'strlen')));
+
+    $available = marlin_environment_names($treeRoot);
+    $lookup = [];
+    foreach ($available as $env) $lookup[strtolower($env)] = $env;
+    foreach ($candidates as $candidate) {
+        $key = strtolower($candidate);
+        if (isset($lookup[$key])) {
+            return [
+                'ok' => true,
+                'requested' => $requested,
+                'resolved' => $lookup[$key],
+                'available' => $available,
+                'used_alias' => strcasecmp($requested, $lookup[$key]) !== 0,
+            ];
+        }
+    }
+    return [
+        'ok' => false,
+        'requested' => $requested,
+        'resolved' => '',
+        'available' => $available,
+        'used_alias' => false,
+    ];
+}
+
+function marlin_selected_screen(array $board, string $screenId): array
+{
+    foreach (($board['marlin']['screens'] ?? []) as $screen) {
+        if ((string)($screen['id'] ?? '') === $screenId) return $screen;
+    }
+    return ['id' => 'none', 'label' => 'None / headless', 'type' => 'none'];
+}
+
+/** Confirm the object family produced by the compiler matches the selected UI. */
+function marlin_verify_compiled_screen(string $pioEnvDir, array $screen, array $doc): array
+{
+    $type = (string)($screen['type'] ?? 'none');
+    $objects = [];
+    if (is_dir($pioEnvDir)) {
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($pioEnvDir, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($it as $node) {
+                if ($node->isFile() && str_ends_with($node->getFilename(), '.o')) {
+                    $objects[$node->getFilename()] = true;
+                }
+            }
+        } catch (Throwable) {
+        }
+    }
+
+    $enabledValue = static function (string $key) use ($doc): ?string {
+        $entry = $doc['defines'][$key] ?? null;
+        if ($entry === null || !($entry['enabled'] ?? false)) return null;
+        return trim((string)($entry['value'] ?? ''));
+    };
+
+    $checks = [];
+    $define = marlin_screen_define($screen);
+    $hasHd44780 = isset($objects['marlinui_HD44780.cpp.o']) || isset($objects['ultralcd_HD44780.cpp.o']);
+    $hasDogm = isset($objects['marlinui_DOGM.cpp.o']) || isset($objects['ultralcd_DOGM.cpp.o']);
+    if ($type === 'char20x4') {
+        $checks[] = ['name' => 'Selected character LCD define enabled',
+                     'pass' => $define !== null && (bool)($doc['defines'][$define]['enabled'] ?? false)];
+        $checks[] = ['name' => 'HD44780 character LCD object', 'pass' => $hasHd44780];
+        $checks[] = ['name' => 'No conflicting DOGM object', 'pass' => !$hasDogm];
+    } elseif (in_array($type, ['mono128x64', 'marlinui_tft'], true)) {
+        $checks[] = ['name' => 'Selected graphical LCD define enabled',
+                     'pass' => $define !== null && (bool)($doc['defines'][$define]['enabled'] ?? false)];
+        $checks[] = ['name' => 'DOGM full-graphic LCD object', 'pass' => $hasDogm];
+        $checks[] = ['name' => 'No conflicting HD44780 object', 'pass' => !$hasHd44780];
+    } elseif (in_array($type, ['none', 'serial_tft'], true)) {
+        $checks[] = ['name' => 'No MarlinUI LCD object compiled', 'pass' => !$hasHd44780 && !$hasDogm];
+    }
+
+    if (in_array($type, ['serial_tft', 'marlinui_tft'], true)) {
+        $serial = $enabledValue('SERIAL_PORT');
+        $baud = $enabledValue('BAUDRATE');
+        $usb = $enabledValue('SERIAL_PORT_2');
+        $baud2 = $enabledValue('BAUDRATE_2');
+        $checks[] = ['name' => 'TFT UART enabled', 'pass' => $serial !== null && $serial !== '-1'];
+        $checks[] = ['name' => 'TFT UART baud enabled', 'pass' => $baud !== null && (int)$baud > 0];
+        $checks[] = ['name' => 'USB serial enabled on secondary port', 'pass' => $usb === '-1'];
+        $checks[] = ['name' => 'USB secondary baud enabled', 'pass' => $baud2 !== null && (int)$baud2 > 0];
+    }
+
+    $failed = array_values(array_filter($checks, fn ($c) => !($c['pass'] ?? false)));
+    return [
+        'ok' => $failed === [],
+        'type' => $type,
+        'checks' => $checks,
+        'detail' => $failed === [] ? '' : implode('; ', array_column($failed, 'name')),
+    ];
+}
+
+function compiler_manifest_write(string $path, array $manifest): bool
+{
+    $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    return $json !== false && @file_put_contents($path, $json . "\n") !== false;
+}
+
+// Fatal-error trap: restore source and never leave a build frozen if PHP dies.
 register_shutdown_function(function () use ($buildId): void {
+    source_patch_restore_all();
     $err = error_get_last();
     if ($err === null || !in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
         return;
@@ -76,9 +283,7 @@ function blog(string $msg): void
 function bstate(string $status, ?int $conf = null, bool $finished = false): void
 {
     global $buildId, $gates, $logPath;
-    if ($conf !== null) {
-        $conf = max(0, min(100, $conf));
-    }
+    if ($conf !== null) $conf = max(0, min(100, $conf));
     $sql = "UPDATE builds SET status = ?, gate_json = ?, log_path = ?"
          . ($conf !== null ? ", confidence = " . (int)$conf : "")
          . ($finished ? ", finished_at = datetime('now')" : "")
@@ -97,6 +302,30 @@ function gate(string $id, string $label, int $points, bool $pass, string $detail
 db()->prepare("UPDATE builds SET status = 'validating', started_at = datetime('now'), log_path = ? WHERE id = ?")
     ->execute([$logPath, $buildId]);
 blog('Build #' . $buildId . ' — ' . $project['name'] . ' (' . $project['firmware'] . ', ' . ($board['name'] ?? '?') . ')');
+
+// Serialize builds that share one imported source tree. A heartbeat keeps the
+// stale-build sweeper from killing a worker while it waits for another compile.
+$buildLockPath = project_dir((int)$project['id']) . '/.compiler.lock';
+$buildLock = @fopen($buildLockPath, 'c+');
+$lockAcquired = false;
+$lockDeadline = time() + 2400;
+$nextLockLog = 0;
+while ($buildLock !== false && time() < $lockDeadline) {
+    if (@flock($buildLock, LOCK_EX | LOCK_NB)) {
+        $lockAcquired = true;
+        break;
+    }
+    if (time() >= $nextLockLog) {
+        blog('Waiting for the previous compiler job on this project to finish…');
+        $nextLockLog = time() + 60;
+    }
+    sleep(5);
+}
+if (!$lockAcquired) {
+    gate('worker_lock', 'Compiler source lock acquired', 0, false, 'Timed out waiting for another project build');
+    bstate('failed', 0, true);
+    exit(0);
+}
 
 /* --------------------------------------------------- Klipper pipeline */
 
@@ -183,9 +412,14 @@ if ($project['firmware'] === 'reprap') {
     }
 
     $fwPath = $buildDir . '/firmware.bin';
-    @file_put_contents($fwPath, $bin);
+    $fwBytes = @file_put_contents($fwPath, $bin);
+    if ($fwBytes === false || $fwBytes < 1024 || !is_file($fwPath)) {
+        gate('s4_artifact', 'Firmware artifact written', 0, false, 'Downloaded firmware could not be saved');
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
     db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')->execute([$fwPath, $buildId]);
-    blog('firmware.bin: ' . number_format(strlen($bin)) . ' bytes (RRF ' . $asset['tag'] . ')');
+    blog('firmware.bin: ' . number_format((float)$fwBytes) . ' bytes (RRF ' . $asset['tag'] . ')');
 
     $zip = new ZipArchive();
     if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
@@ -237,36 +471,74 @@ if ($project['firmware'] === 'klipper') {
     }
 
     bstate('building', $confidence);
-    @file_put_contents($tree . '/.config', $seed);
+    $klipperConfig = $tree . '/.config';
+    $klipperConfigExisted = is_file($klipperConfig);
+    if ($klipperConfigExisted) source_patch_backup($klipperConfig);
+    $configWrote = @file_put_contents($klipperConfig, $seed) !== false;
     blog('Klipper .config seed:');
-    foreach (explode("\n", trim((string)$seed)) as $l) {
-        blog('  ' . $l);
-    }
+    foreach (explode("\n", trim((string)$seed)) as $line) blog('  ' . $line);
 
+    // Remove every prior output before compiling so an old klipper.bin cannot be
+    // mistaken for a successful build after a compiler failure.
+    build_tree_remove($tree . '/out');
+    $compileStarted = time();
     $cmd = 'cd ' . escapeshellarg($tree)
          . ' && env HOME=/tmp timeout 900 sh -c ' . escapeshellarg('make olddefconfig && make -j2')
          . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
-    $exit = (int)trim((string)shell_exec($cmd));
+    $exit = $configWrote ? (int)trim((string)shell_exec($cmd)) : 1;
 
-    // Artifact name varies by MCU family: STM32/LPC -> klipper.bin,
-    // RP2040 -> klipper.uf2, AVR -> klipper.elf.
     $artifact = (string)($board['klipper']['artifact'] ?? 'klipper.bin');
     $bin = $tree . '/out/' . $artifact;
-    $built = $exit === 0 && is_file($bin);
-    $detail = '';
-    if (!$built) {
-        $tail = (string)@shell_exec('grep -iE "error" ' . escapeshellarg($logPath) . ' | tail -6');
-        $detail = $exit === 124 ? 'Build timed out (15 min)' : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit);
+    $compilerOk = $configWrote && $exit === 0 && is_file($bin) && (int)@filesize($bin) > 0
+        && (int)@filemtime($bin) >= $compileStarted - 2;
+    $compileDetail = '';
+    if (!$compilerOk) {
+        $tail = (string)@shell_exec('grep -iE "error|failed" ' . escapeshellarg($logPath) . ' | tail -8');
+        $compileDetail = !$configWrote ? 'Could not write Klipper .config'
+            : ($exit === 124 ? 'Build timed out (15 min)'
+            : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit . ' or produced no fresh artifact'));
     }
-    $confidence += gate('s3_make', 'Klipper MCU firmware compiles (' . $artifact . ')', 40, $built, $detail);
+    $confidence += gate('s3_make', 'Clean Klipper MCU compile', 30, $compilerOk, $compileDetail);
 
+    $dest = $buildDir . '/' . $artifact;
+    @unlink($dest);
+    $artifactOk = $compilerOk && @copy($bin, $dest) && is_file($dest)
+        && (int)@filesize($dest) === (int)@filesize($bin);
+    $artifactDetail = $artifactOk
+        ? $artifact . ', ' . number_format((float)filesize($dest)) . ' bytes, SHA-256 ' . hash_file('sha256', $dest)
+        : 'Klipper artifact copy or size verification failed';
+    $confidence += gate('s3_artifact', 'Fresh Klipper artifact exported and verified', 5, $artifactOk, $artifactDetail);
+
+    $manifestPath = $buildDir . '/compiler-manifest.json';
+    $manifest = [
+        'hotfetched_version' => defined('HF_VERSION') ? HF_VERSION : null,
+        'build_id' => $buildId,
+        'built_at_utc' => gmdate('c'),
+        'firmware' => 'klipper',
+        'board' => ['id' => (string)$board['id'], 'name' => (string)$board['name']],
+        'mcu' => [
+            'variant_id' => (string)($variant['id'] ?? ''),
+            'label' => (string)($variant['label'] ?? ''),
+            'klipper_mcu' => (string)($variant['klipper_mcu'] ?? ''),
+            'klipper_machine' => (string)($variant['klipper_mach'] ?? ''),
+        ],
+        'artifact' => $artifactOk ? [
+            'filename' => $artifact,
+            'bytes' => (int)filesize($dest),
+            'sha256' => hash_file('sha256', $dest),
+        ] : null,
+        'compiler' => ['exit_code' => $exit, 'clean_output_directory' => true],
+    ];
+    $manifestOk = compiler_manifest_write($manifestPath, $manifest);
+    $boardPostOk = $compilerOk && $artifactOk && $manifestOk
+        && (string)($variant['klipper_mcu'] ?? '') !== '';
+    $confidence += gate('s3_board', 'Klipper board and MCU target verified after compilation', 5, $boardPostOk,
+        $boardPostOk ? 'MCU seed, fresh artifact, and compiler manifest verified' : 'Klipper board/MCU post-build verification failed');
+
+    $built = $compilerOk && $artifactOk && $boardPostOk;
     if ($built) {
-        @copy($bin, $buildDir . '/' . $artifact);
-        // The download endpoint serves firmware by a stable name; keep the real
-        // extension so users flash the right file (.uf2/.elf are not .bin).
-        db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')
-            ->execute([$buildDir . '/' . $artifact, $buildId]);
-        blog($artifact . ': ' . number_format((float)filesize($bin)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
+        db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')->execute([$dest, $buildId]);
+        blog($artifact . ': ' . number_format((float)filesize($dest)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
 
         $printerCfg = klipper_generate_printer_cfg((string)$refTxt, $vals);
         @file_put_contents($buildDir . '/printer.cfg', $printerCfg);
@@ -274,10 +546,14 @@ if ($project['firmware'] === 'klipper') {
         if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
             $zip->addFromString('printer.cfg', $printerCfg);
             $zip->addFromString('klipper.config', (string)$seed);
+            $zip->addFile($manifestPath, 'compiler-manifest.json');
+            $zip->addFile($logPath, 'build.log');
             $zip->addFromString('FLASHING.txt', (string)($board['klipper']['flash_note'] ?? '') . "\nHost side: place printer.cfg in your Klipper host config directory and set the [mcu] serial.");
             $zip->close();
         }
     }
+    build_tree_remove($tree . '/out');
+    if (!$klipperConfigExisted) @unlink($klipperConfig);
     bstate($built ? 'success' : 'failed', $confidence, true);
     db()->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$project['id']]);
     exit(0);
@@ -464,6 +740,50 @@ $advPath  = $root !== false ? realpath($root . '/' . $advRel) : false;
 $doc    = ($confPath !== false && str_starts_with((string)$confPath, $root . '/')) ? marlin_config_parse($confPath) : null;
 $docAdv = ($advPath !== false && str_starts_with((string)$advPath, $root . '/')) ? marlin_config_parse($advPath) : null;
 
+// HotFetched v3.7.2 bootscreen safety net. The UI can preserve old database
+// values, so sanitize the actual source tree immediately before compilation.
+if ($doc !== null && $confPath !== false) {
+    $selectedScreen = (string)($vals['screen'] ?? 'none');
+    $selectedType = 'none';
+    foreach (($board['marlin']['screens'] ?? []) as $s) {
+        if ((string)($s['id'] ?? '') === $selectedScreen) {
+            $selectedType = (string)($s['type'] ?? 'none');
+            break;
+        }
+    }
+    $bitmapCapable = in_array($selectedType, ['mono128x64', 'marlinui_tft'], true);
+    $showBoot = (($vals['show_bootscreen'] ?? '0') === '1');
+    $marlinDir = dirname((string)$confPath);
+    $bootHeader = $marlinDir . '/_Bootscreen.h';
+    $statusHeader = $marlinDir . '/_Statusscreen.h';
+    $changed = [];
+
+    $forceEnabled = function (string $key, bool $enable) use (&$doc, &$changed): void {
+        if (!isset($doc['defines'][$key])) return;
+        $current = (bool)($doc['defines'][$key]['enabled'] ?? false);
+        if ($current === $enable) return;
+        $value = $doc['defines'][$key]['value'] ?? null;
+        if (marlin_config_set($doc, $key, $value, $enable)) $changed[] = $key;
+    };
+
+    if (!$showBoot) $forceEnabled('SHOW_BOOTSCREEN', false);
+    if (!$showBoot || !$bitmapCapable || !is_file($bootHeader)) {
+        $forceEnabled('SHOW_CUSTOM_BOOTSCREEN', false);
+    }
+    if (!$bitmapCapable || !is_file($statusHeader)) {
+        $forceEnabled('CUSTOM_STATUS_SCREEN_IMAGE', false);
+    }
+
+    if ($changed !== []) {
+        $ok = source_patch_backup((string)$confPath)
+           && marlin_config_write($doc, (string)$confPath);
+        blog($ok
+            ? 'Bootscreen sanitizer: disabled incompatible/stale ' . implode(', ', $changed)
+            : 'Bootscreen sanitizer failure: could not update Configuration.h');
+        if ($ok) $doc = marlin_config_parse((string)$confPath);
+    }
+}
+
 // A project saved before MMU12 support may still contain PRUSA_MMU3 in
 // Configuration.h. Correct it here as well as on form save so the next build
 // works immediately after replacing the webroot files.
@@ -472,8 +792,11 @@ $effectiveMmu = marlin_effective_mmu_model($vals);
 if ($doc !== null && $effectiveMmu === 'EXTENDABLE_EMU_MMU3') {
     $currentMmu = trim((string)($doc['defines']['MMU_MODEL']['value'] ?? ''));
     if ($currentMmu !== $effectiveMmu) {
-        marlin_config_set($doc, 'MMU_MODEL', $effectiveMmu, true);
-        $mmuConfigWriteOk = $confPath !== false && marlin_config_write($doc, $confPath);
+        $mmuConfigWriteOk = $confPath !== false && source_patch_backup((string)$confPath);
+        if ($mmuConfigWriteOk) {
+            marlin_config_set($doc, 'MMU_MODEL', $effectiveMmu, true);
+            $mmuConfigWriteOk = marlin_config_write($doc, (string)$confPath);
+        }
         blog($mmuConfigWriteOk
             ? 'MMU12 config: MMU_MODEL set to EXTENDABLE_EMU_MMU3'
             : 'MMU12 config failure: could not update Configuration.h');
@@ -505,7 +828,22 @@ if (is_file($boardsH)) {
 $minMarlin = (string)($board['min_marlin'] ?? '');
 $verHint = $minMarlin !== '' ? "Marlin {$minMarlin}+ (or bugfix-2.1.x)" : 'a newer Marlin (2.1.2+ / bugfix-2.1.x)';
 $treeDetail = $treeHasBoard ? '' : $expectedMb . " is not defined in this Marlin source. This board needs {$verHint}. Import a matching source via Replace source, or pick a board this tree supports.";
-$confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin version', 5, $treeHasBoard, $treeDetail);
+$confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin version', 3, $treeHasBoard, $treeDetail);
+
+$treeRoot = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '');
+$envResolution = marlin_resolve_environment($treeRoot, $variant);
+$envDetail = '';
+if ($envResolution['ok']) {
+    $envDetail = $envResolution['used_alias']
+        ? 'Profile requested ' . $envResolution['requested'] . '; imported source provides ' . $envResolution['resolved']
+        : (string)$envResolution['resolved'];
+} else {
+    $sample = array_slice($envResolution['available'], 0, 12);
+    $envDetail = 'Environment ' . ($envResolution['requested'] !== '' ? $envResolution['requested'] : '(unset)')
+        . ' is not declared by this source tree'
+        . ($sample !== [] ? '. Available examples: ' . implode(', ', $sample) : '. No PlatformIO environments were discovered.');
+}
+$confidence += gate('s2_env', 'Selected MCU compiler environment exists', 2, (bool)$envResolution['ok'], $envDetail);
 
 /* The selected MMU model must exist in the IMPORTED tree. Marlin resolves it by
    token-pasting (_MMU = CAT(_, MMU_MODEL)); if the tree predates the model, the
@@ -513,9 +851,12 @@ $confidence += gate('s2_treeboard', 'Board is supported by the imported Marlin v
    EXTRUDERS - producing bogus "E2_STEP_PIN not defined" errors instead of an
    honest "unsupported" message. PRUSA_MMU3 landed in Marlin 2.1.3 / bugfix-2.1.x. */
 $mmuPick = marlin_effective_mmu_model($vals);
-$treeRoot = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '');
 $mmu12Prepare = null;
 if ($mmuPick === 'EXTENDABLE_EMU_MMU3') {
+    foreach (['Conditionals-1-axes.h', 'Conditionals_post.h'] as $candidate) {
+        $candidatePath = $treeRoot . '/Marlin/src/inc/' . $candidate;
+        if (is_file($candidatePath)) source_patch_backup($candidatePath);
+    }
     $mmu12Prepare = marlin_enable_extendable_mmu3($treeRoot);
     blog(($mmu12Prepare['ok'] ? 'MMU12 source: ' : 'MMU12 source failure: ') . $mmu12Prepare['detail']);
 }
@@ -554,22 +895,14 @@ if ($confidence < 60) {
 
 /* ----------------------------------------------- Stage 3: compile (40) */
 
-if (!$thermalOverride) {
-    $tempCppChk = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '') . '/Marlin/src/module/temperature.cpp';
-    $chk = @file_get_contents($tempCppChk);
-    if ($chk !== false && str_contains($chk, 'HotFetched thermal override')) {
-        blog('Note: this tree has thermal checks disabled from a previous override build. Replace the source to restore stock checks.');
-    }
-}
-
-$env = (string)($variant['marlin_env'] ?? '');
+$env = (string)($envResolution['resolved'] ?? '');
 $pio = '/opt/pio-venv/bin/pio';
 if (!is_executable($pio)) {
     $pio = trim((string)shell_exec('command -v pio'));
 }
 
 if ($env === '' || $pio === '') {
-    $confidence += gate('s3_compile', 'PlatformIO compile', 40, false, 'PlatformIO or environment unavailable');
+    $confidence += gate('s3_compile', 'PlatformIO compile', 25, false, 'PlatformIO or environment unavailable');
     bstate('failed', $confidence, true);
     exit(0);
 }
@@ -583,6 +916,12 @@ if ($thermalOverride) {
     $tempCpp = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '') . '/Marlin/src/module/temperature.cpp';
     $src = @file_get_contents($tempCpp);
     if ($src !== false && !str_contains($src, 'HotFetched thermal override')) {
+        if (!source_patch_backup($tempCpp)) {
+            blog('Thermal override: source backup failed; refusing to mutate the imported tree.');
+            $confidence += gate('s3_compile', 'PlatformIO compile produces firmware', 25, false, 'Could not back up temperature.cpp before thermal override');
+            bstate('failed', $confidence, true);
+            exit(0);
+        }
         $patched = preg_replace(
             '/#define CHECK_MAXTEMP_\(N,M,S\) static_assert\(.*?;/s',
             '#define CHECK_MAXTEMP_(N,M,S) static_assert(true, "HotFetched thermal override");',
@@ -600,61 +939,177 @@ if ($thermalOverride) {
     }
 }
 
-blog("Compiling with PlatformIO env {$env} — first build downloads the STM32 toolchain and can take several minutes.");
+$defValue = static function (?array $entry, string $fallback = 'disabled'): string {
+    if ($entry === null || !($entry['enabled'] ?? false)) return $fallback;
+    $value = trim((string)($entry['value'] ?? ''));
+    return $value !== '' ? $value : 'enabled';
+};
+$activeDisplays = [];
+foreach (($board['marlin']['screens'] ?? []) as $screenDef) {
+    $displayDefine = marlin_screen_define($screenDef);
+    if ($displayDefine !== null && ($doc['defines'][$displayDefine]['enabled'] ?? false)) {
+        $activeDisplays[$displayDefine] = true;
+    }
+}
+blog('Interface: SERIAL_PORT=' . $defValue($doc['defines']['SERIAL_PORT'] ?? null)
+    . ', BAUDRATE=' . $defValue($doc['defines']['BAUDRATE'] ?? null)
+    . ', SERIAL_PORT_2=' . $defValue($doc['defines']['SERIAL_PORT_2'] ?? null)
+    . ', BAUDRATE_2=' . $defValue($doc['defines']['BAUDRATE_2'] ?? null));
+blog('Display defines: ' . ($activeDisplays === [] ? 'none' : implode(', ', array_keys($activeDisplays))));
+blog('MMU: model=' . $mmuPick
+    . ', port=' . $defValue($docAdv['defines']['MMU_SERIAL_PORT'] ?? null)
+    . ', baud=' . $defValue($docAdv['defines']['MMU_BAUD'] ?? null));
+$selectedScreen = marlin_selected_screen($board, (string)($vals['screen'] ?? 'none'));
+$selectedScreenDefine = marlin_screen_define($selectedScreen);
+blog('Compiler target: board=' . (string)$board['id']
+    . ', MCU=' . (string)($variant['id'] ?? '?')
+    . ', environment=' . $env
+    . ($envResolution['used_alias'] ? ' (resolved from ' . $envResolution['requested'] . ')' : ''));
+blog('Screen target: ' . (string)($selectedScreen['label'] ?? $selectedScreen['id'] ?? 'none')
+    . ', type=' . (string)($selectedScreen['type'] ?? 'none')
+    . ($selectedScreenDefine !== null ? ', define=' . $selectedScreenDefine : ''));
+blog("Compiling with PlatformIO env {$env} in a new isolated build directory.");
 
-$srcRoot = $root . ($detect['root'] !== '' ? '' : '');
-$cmd = 'cd ' . escapeshellarg($root . ($detect['root'] !== '' ? '/' . $detect['root'] : ''))
-     . ' && env HOME=/tmp PLATFORMIO_CORE_DIR=' . escapeshellarg(getenv('PLATFORMIO_CORE_DIR') ?: '/opt/platformio')
+// Never reuse .pio objects from another screen, board, MCU, or build. PlatformIO
+// packages remain cached globally, but compiler products are isolated per build.
+$isolatedBuildRoot = $buildDir . '/pio-build';
+build_tree_remove($isolatedBuildRoot);
+@mkdir($isolatedBuildRoot, 0775, true);
+foreach (['firmware.bin', 'firmware.hex', 'firmware.uf2', 'compiler-manifest.json'] as $oldArtifact) {
+    @unlink($buildDir . '/' . $oldArtifact);
+}
+$compileStarted = time();
+$projectRoot = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '');
+$cmd = 'cd ' . escapeshellarg($projectRoot)
+     . ' && env HOME=/tmp'
+     . ' PLATFORMIO_CORE_DIR=' . escapeshellarg(getenv('PLATFORMIO_CORE_DIR') ?: '/opt/platformio')
+     . ' PLATFORMIO_BUILD_DIR=' . escapeshellarg($isolatedBuildRoot)
      . ' PLATFORMIO_SETTING_ENABLE_TELEMETRY=No'
+     . ' PLATFORMIO_DISABLE_UPGRADE_CHECK=Yes'
+     . ' CCACHE_DIR=' . escapeshellarg(getenv('CCACHE_DIR') ?: '/opt/ccache')
      . ' timeout 2400 ' . escapeshellarg($pio) . ' run -e ' . escapeshellarg($env)
      . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
 
 $exit = (int)trim((string)shell_exec($cmd));
+$pioDir = $isolatedBuildRoot . '/' . $env;
+$elfPath = $pioDir . '/firmware.elf';
+$compilerOk = $exit === 0 && is_file($elfPath) && (int)@filesize($elfPath) > 0
+    && (int)@filemtime($elfPath) >= $compileStarted - 2;
+$compileDetail = '';
+if (!$compilerOk) {
+    $tail = (string)@shell_exec('grep -iE "error|#error|failed" ' . escapeshellarg($logPath) . ' | tail -10');
+    $compileDetail = $exit === 124
+        ? 'Compile timed out (40 min)'
+        : ((trim($tail) !== '') ? trim($tail) : 'Compiler exited ' . $exit . ' or did not produce a fresh firmware.elf');
+}
+$confidence += gate('s3_compile', 'Clean isolated PlatformIO compile and link', 25, $compilerOk, $compileDetail);
 
 // PlatformIO's output extension depends on the MCU family:
-//   STM32 / LPC -> firmware.bin   AVR (Melzi/RAMPS) -> firmware.hex   RP2040 -> firmware.uf2
-$pioDir = $root . ($detect['root'] !== '' ? '/' . $detect['root'] : '') . '/.pio/build/' . $env;
-$fwSrc  = '';
+// STM32/LPC -> .bin, AVR -> .hex, RP2040 -> .uf2.
+$fwSrc = '';
 $fwName = '';
-foreach (['firmware.bin', 'firmware.hex', 'firmware.uf2'] as $cand) {
-    if (is_file($pioDir . '/' . $cand)) {
-        $fwSrc  = $pioDir . '/' . $cand;
-        $fwName = $cand;
+foreach (['firmware.bin', 'firmware.hex', 'firmware.uf2'] as $candidate) {
+    $candidatePath = $pioDir . '/' . $candidate;
+    if (is_file($candidatePath) && (int)@filesize($candidatePath) > 0
+        && (int)@filemtime($candidatePath) >= $compileStarted - 2) {
+        $fwSrc = $candidatePath;
+        $fwName = $candidate;
         break;
     }
 }
-$built = $exit === 0 && $fwSrc !== '';
+$artifactDest = $fwName !== '' ? $buildDir . '/' . $fwName : '';
+$artifactOk = $compilerOk && $fwSrc !== '' && @copy($fwSrc, $artifactDest)
+    && is_file($artifactDest) && (int)@filesize($artifactDest) === (int)@filesize($fwSrc);
+$artifactDetail = $artifactOk
+    ? $fwName . ', ' . number_format((float)filesize($artifactDest)) . ' bytes, SHA-256 ' . hash_file('sha256', $artifactDest)
+    : ($fwSrc === '' ? 'No fresh firmware.bin/.hex/.uf2 was produced' : 'Firmware could not be copied or size verification failed');
+$confidence += gate('s3_artifact', 'Fresh firmware artifact exported and verified', 5, $artifactOk, $artifactDetail);
 
-$detail = '';
-if (!$built) {
-    $tail = (string)@shell_exec('grep -iE "error|#error" ' . escapeshellarg($logPath) . ' | tail -8');
-    $detail = $exit === 124 ? 'Compile timed out (40 min)' : ((trim($tail) !== '') ? trim($tail) : 'Compiler exited ' . $exit);
-}
-$confidence += gate('s3_compile', 'PlatformIO compile produces firmware', 40, $built, $detail);
+$screenCheck = $compilerOk
+    ? marlin_verify_compiled_screen($pioDir, $selectedScreen, $doc)
+    : ['ok' => false, 'type' => (string)($selectedScreen['type'] ?? 'none'), 'checks' => [], 'detail' => 'Compiler did not finish'];
+$screenDetail = $screenCheck['ok']
+    ? 'Compiler output matches ' . (string)($selectedScreen['type'] ?? 'none')
+    : (string)$screenCheck['detail'];
+$confidence += gate('s3_screen', 'Selected screen and serial interfaces are present in compiler output', 5, (bool)$screenCheck['ok'], $screenDetail);
 
+$boardPostOk = $compilerOk && is_dir($pioDir)
+    && (string)($variant['id'] ?? '') !== ''
+    && (string)($envResolution['resolved'] ?? '') === $env
+    && $mbOk && $treeHasBoard;
+$manifestPath = $buildDir . '/compiler-manifest.json';
+$manifest = [
+    'hotfetched_version' => defined('HF_VERSION') ? HF_VERSION : null,
+    'build_id' => $buildId,
+    'built_at_utc' => gmdate('c'),
+    'firmware' => 'marlin',
+    'board' => [
+        'id' => (string)$board['id'],
+        'name' => (string)$board['name'],
+        'motherboard' => $expectedMb,
+    ],
+    'mcu' => [
+        'variant_id' => (string)($variant['id'] ?? ''),
+        'label' => (string)($variant['label'] ?? ''),
+        'requested_environment' => (string)($envResolution['requested'] ?? ''),
+        'resolved_environment' => $env,
+        'used_environment_alias' => (bool)($envResolution['used_alias'] ?? false),
+    ],
+    'screen' => [
+        'id' => (string)($selectedScreen['id'] ?? 'none'),
+        'label' => (string)($selectedScreen['label'] ?? ''),
+        'type' => (string)($selectedScreen['type'] ?? 'none'),
+        'define' => $selectedScreenDefine,
+        'verification' => $screenCheck,
+    ],
+    'serial' => [
+        'SERIAL_PORT' => $defValue($doc['defines']['SERIAL_PORT'] ?? null),
+        'BAUDRATE' => $defValue($doc['defines']['BAUDRATE'] ?? null),
+        'SERIAL_PORT_2' => $defValue($doc['defines']['SERIAL_PORT_2'] ?? null),
+        'BAUDRATE_2' => $defValue($doc['defines']['BAUDRATE_2'] ?? null),
+    ],
+    'artifact' => $artifactOk ? [
+        'filename' => $fwName,
+        'bytes' => (int)filesize($artifactDest),
+        'sha256' => hash_file('sha256', $artifactDest),
+    ] : null,
+    'compiler' => [
+        'platformio_environment' => $env,
+        'exit_code' => $exit,
+        'isolated_build' => true,
+        'linked_elf_bytes' => is_file($elfPath) ? (int)filesize($elfPath) : 0,
+    ],
+];
+$manifestOk = compiler_manifest_write($manifestPath, $manifest);
+$boardPostOk = $boardPostOk && $manifestOk;
+$boardPostDetail = $boardPostOk
+    ? 'Board, MCU environment, MOTHERBOARD, linked ELF, and compiler manifest verified'
+    : (!$manifestOk ? 'Compiler manifest could not be written' : 'Board/MCU/environment post-build verification failed');
+$confidence += gate('s3_board', 'Board and MCU target verified after compilation', 5, $boardPostOk, $boardPostDetail);
+
+$built = $compilerOk && $artifactOk && (bool)$screenCheck['ok'] && $boardPostOk;
 if ($built) {
-    // Keep the real extension so users flash the right file (.hex != .bin).
-    @copy($fwSrc, $buildDir . '/' . $fwName);
     db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')
-        ->execute([$buildDir . '/' . $fwName, $buildId]);
-    blog($fwName . ': ' . number_format((float)filesize($fwSrc)) . ' bytes');
+        ->execute([$artifactDest, $buildId]);
+    blog($fwName . ': ' . number_format((float)filesize($artifactDest)) . ' bytes');
 
-    // Config bundle for export/download
     $zip = new ZipArchive();
     if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
         $zip->addFile((string)$confPath, 'Marlin/Configuration.h');
         $zip->addFile((string)$advPath, 'Marlin/Configuration_adv.h');
+        $zip->addFile($manifestPath, 'compiler-manifest.json');
+        $zip->addFile($logPath, 'build.log');
         $bs = dirname((string)$advPath) . '/_Bootscreen.h';
-        if (is_file($bs)) {
-            $zip->addFile($bs, 'Marlin/_Bootscreen.h');
-        }
+        if (is_file($bs)) $zip->addFile($bs, 'Marlin/_Bootscreen.h');
         $ss = dirname((string)$advPath) . '/_Statusscreen.h';
-        if (is_file($ss)) {
-            $zip->addFile($ss, 'Marlin/_Statusscreen.h');
-        }
+        if (is_file($ss)) $zip->addFile($ss, 'Marlin/_Statusscreen.h');
         $zip->close();
     }
 }
+
+// Compiler objects were inspected and recorded in compiler-manifest.json. Remove
+// the per-build object tree to prevent disk growth and eliminate stale reuse.
+build_tree_remove($isolatedBuildRoot);
 
 bstate($built ? 'success' : 'failed', $confidence, true);
 db()->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$project['id']]);
