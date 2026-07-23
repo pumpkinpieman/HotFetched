@@ -1,9 +1,0 @@
-// READ-ONLY BACKUP TEMPLATE. Stop if access is protected.
-// SPC2168 flash: 0x10000000 length 0x80000 (512 KiB)
-// SPC1168 flash: 0x10000000 length 0x20000 (128 KiB)
-h
-mem32 0xE000ED00, 1
-// Run only ONE matching line after confirming the target:
-// savebin original-spc2168-flash.bin, 0x10000000, 0x80000
-// savebin original-spc1168-flash.bin, 0x10000000, 0x20000
-// Never use unlock or erase commands to defeat read protection.

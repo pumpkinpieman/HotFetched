@@ -1,8 +1,0 @@
-function,mcu_signal,mcu_pin,pcb_pad_or_connector,continuity_verified,voltage_verified,evidence_state,notes
-SWD data,GPIO38/TMS/SWD,44,,,no,documented MCU pin only,
-SWD clock,GPIO39/TCK/SWCK,45,,,no,documented MCU pin only,
-JTAG reset / debug enable,TRSTn,46,,,no,documented MCU pin only,
-Reset,XRSTn,47,,,no,documented MCU pin only,
-Boot,GPIO40/BOOT,48,,,no,documented MCU pin only,
-Ground,DVSS,multiple,,,no,documented MCU pins,
-Target reference,DVDD,multiple,,,no,documented 3.3 V supply,
