@@ -9,7 +9,7 @@ declare(strict_types=1);
  *   Stage 1 (40) — static validation of saved configuration
  *   Stage 2 (20) — Configuration.h / _adv.h parse + board integrity
  *   Stage 3 (40) — real PlatformIO compile; firmware.bin produced
- *   HotFetched v3.7.9 direct UI/layout package
+ *   HotFetched v3.8.0 serial-interface selection package
  * 100 means the firmware actually compiled.
  */
 
@@ -636,6 +636,12 @@ if (($vals['babystep_zprobe'] ?? '0') === '1') {
 // HAS_MARLINUI_MENU, and BEEPER_PIN lives on the LCD's EXP header. An
 // external-firmware TFT (BTT touch mode) or no display provides neither.
 $uiPresent = marlin_screen_has_marlinui($board, (string)($vals['screen'] ?? ''));
+$screenForSerial = marlin_selected_screen($board, (string)($vals['screen'] ?? 'none'));
+$screenSerialType = (string)($screenForSerial['type'] ?? 'none');
+if (in_array($screenSerialType, ['serial_tft', 'marlinui_tft'], true)
+    && (string)($vals['serial_port'] ?? '') === '-1') {
+    $conflicts[] = 'A serial/touch TFT uses the primary UART while Native USB is enabled as SERIAL_PORT_2. Select a hardware UART for the primary host interface, or choose a non-serial display';
+}
 if (!$uiPresent) {
     if (($vals['mmu_menus'] ?? '0') === '1') {
         $conflicts[] = 'The MMU LCD menu needs a MarlinUI display - your selected screen runs its own firmware (or none), so Marlin has no menu to add it to. Untick it, or pick a Marlin-native LCD';

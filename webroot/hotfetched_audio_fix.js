@@ -1,4 +1,4 @@
-/* HotFetched v3.7.9: page order, audio layout, melody application, and stable firmware filenames. */
+/* HotFetched v3.8.0: page order, audio layout, melody application, and stable firmware filenames. */
 (() => {
   'use strict';
 

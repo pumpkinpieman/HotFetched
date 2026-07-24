@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.7.9';
+const HF_VERSION = '3.8.0';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -702,6 +702,32 @@ function marlin_extract_numbers(?string $value, int $count): array
     return array_pad(array_slice($nums, 0, $count), $count, null);
 }
 
+/** Return the board-approved Marlin host serial ports as unique strings. */
+function marlin_serial_ports(array $board): array
+{
+    $ports = [];
+    foreach (($board['marlin']['serial_ports'] ?? [1]) as $port) {
+        $value = trim((string)$port);
+        if (!preg_match('/^-?\d+$/', $value)) continue;
+        if (!in_array($value, $ports, true)) $ports[] = $value;
+    }
+    return $ports !== [] ? $ports : ['1'];
+}
+
+/** User-facing labels for Marlin SERIAL_PORT values. */
+function marlin_serial_port_labels(array $ports): array
+{
+    $labels = [];
+    foreach ($ports as $port) {
+        $labels[$port] = match ($port) {
+            '-1' => 'Native USB (-1)',
+            '0'  => 'Hardware UART0 (0)',
+            default => 'Hardware UART' . $port . ' (' . $port . ')',
+        };
+    }
+    return $labels;
+}
+
 /**
  * Curated editable fields for a Marlin project, validated against the
  * board definition. Each: key, label, group, type, and constraints.
@@ -711,6 +737,7 @@ function marlin_field_defs(array $board): array
 {
     $lim     = $board['limits'];
     $drivers = $board['marlin']['valid_drivers'];
+    $serialPorts = marlin_serial_ports($board);
 
     $eSlots = count(array_filter($board['marlin']['driver_slots'] ?? [], fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
     $eSlots = max(1, $eSlots);
@@ -718,6 +745,12 @@ function marlin_field_defs(array $board): array
     return [
         ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine',
          'type' => 'text', 'maxlen' => 40],
+
+        ['key' => 'serial_port', 'label' => 'Primary host serial interface', 'group' => 'Interface',
+         'type' => 'select', 'options' => $serialPorts,
+         'option_labels' => marlin_serial_port_labels($serialPorts),
+         'default' => $serialPorts[0],
+         'hint' => 'Native USB uses -1. UART choices use the board serial header/pins.'],
 
         ['key' => 'serial_baud', 'label' => 'Printer / TFT serial baud rate', 'group' => 'Interface',
          'type' => 'select',
@@ -813,6 +846,7 @@ function marlin_current_values(array $doc): array
 
     return [
         'machine_name' => $mn !== null && $mn['enabled'] ? $strip($mn) : null,
+        'serial_port' => $num($get('SERIAL_PORT')),
         'serial_baud' => $num($get('BAUDRATE')) ?? '250000',
         'driver_x'  => $driver($get('X_DRIVER_TYPE')),
         'driver_y'  => $driver($get('Y_DRIVER_TYPE')),
@@ -838,8 +872,9 @@ function marlin_current_values(array $doc): array
 }
 
 /**
- * Apply validated field values to a parsed Configuration.h document,
- * including board-locked defines (MOTHERBOARD, SERIAL_PORT).
+ * Apply validated field values to a parsed Configuration.h document.
+ * MOTHERBOARD stays board-locked; SERIAL_PORT is selected from the ports
+ * explicitly allowed by the board profile.
  * Returns list of applied define names.
  */
 function marlin_apply_values(array &$doc, array $v, array $board): array
@@ -851,9 +886,15 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
         }
     };
 
-    // Board-locked
+    // Board-locked motherboard; validated, user-selectable host interface.
     $set('MOTHERBOARD', (string)$board['marlin']['motherboard']);
-    $set('SERIAL_PORT', (string)($board['marlin']['serial_ports'][0] ?? 1));
+    $serialPorts = marlin_serial_ports($board);
+    $currentSerial = trim((string)($doc['defines']['SERIAL_PORT']['value'] ?? ''));
+    $serialPort = (string)($v['serial_port'] ?? '');
+    if (!in_array($serialPort, $serialPorts, true)) {
+        $serialPort = in_array($currentSerial, $serialPorts, true) ? $currentSerial : $serialPorts[0];
+    }
+    $set('SERIAL_PORT', $serialPort);
     $set('BAUDRATE', (string)(int)($v['serial_baud'] ?? 250000));
 
     // Machine
@@ -3242,6 +3283,9 @@ function hf_validate_fields(array $fields, array $input): array
 
             case 'select':
                 $raw = is_string($raw) ? $raw : '';
+                if ($raw === '' && array_key_exists('default', $f)) {
+                    $raw = (string)$f['default'];
+                }
                 if (!in_array($raw, $f['options'], true)) {
                     $errors[$key] = 'Choose a valid option';
                 }
