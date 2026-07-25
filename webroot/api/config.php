@@ -120,7 +120,7 @@ switch ($action) {
                                marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                                marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                                marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
-        $current = array_merge(marlin_current_values($doc), marlin_current_values_tier1($doc, $adv),
+        $current = array_merge(marlin_current_values($doc), marlin_current_values_fans($adv), marlin_current_values_tier1($doc, $adv),
                                marlin_current_values_tier2($doc, $adv),
                                marlin_current_values_leveling($doc),
                                marlin_current_values_wifi($adv, $board),
@@ -207,6 +207,15 @@ switch ($action) {
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
         [$values, $errors] = hf_validate_fields($fields, $input);
 
+        if (($values['e0_auto_fan'] ?? '0') === '1') {
+            foreach (['E0_AUTO_FAN_PIN', 'EXTRUDER_AUTO_FAN_TEMPERATURE', 'EXTRUDER_AUTO_FAN_SPEED'] as $requiredDefine) {
+                if (!isset($adv['defines'][$requiredDefine])) {
+                    $errors['e0_auto_fan'] = 'This imported Marlin version does not expose the required automatic-fan setting: ' . $requiredDefine;
+                    break;
+                }
+            }
+        }
+
         if ($errors !== []) {
             json_out(['ok' => false, 'error' => 'Validation failed', 'field_errors' => $errors], 422);
         }
@@ -239,6 +248,7 @@ switch ($action) {
         );
         $appliedAdv = array_merge(
             marlin_apply_values_adv($adv, $values),
+            marlin_apply_values_fans($adv, $values),
             marlin_apply_values_tier2_adv($adv, $values),
             marlin_apply_values_wifi($adv, $values, $board),
             marlin_apply_values_mmu_adv($adv, $values, $board),

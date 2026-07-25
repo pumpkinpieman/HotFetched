@@ -206,14 +206,23 @@ function marlin_verify_compiled_screen(string $pioEnvDir, array $screen, array $
     }
 
     if (in_array($type, ['serial_tft', 'marlinui_tft'], true)) {
-        $serial = $enabledValue('SERIAL_PORT');
-        $baud = $enabledValue('BAUDRATE');
-        $usb = $enabledValue('SERIAL_PORT_2');
+        $primary = $enabledValue('SERIAL_PORT');
+        $secondary = $enabledValue('SERIAL_PORT_2');
+        $baud1 = $enabledValue('BAUDRATE');
         $baud2 = $enabledValue('BAUDRATE_2');
-        $checks[] = ['name' => 'TFT UART enabled', 'pass' => $serial !== null && $serial !== '-1'];
-        $checks[] = ['name' => 'TFT UART baud enabled', 'pass' => $baud !== null && (int)$baud > 0];
-        $checks[] = ['name' => 'USB serial enabled on secondary port', 'pass' => $usb === '-1'];
-        $checks[] = ['name' => 'USB secondary baud enabled', 'pass' => $baud2 !== null && (int)$baud2 > 0];
+        $primaryIsHardware = $primary !== null && $primary !== '-1';
+        $secondaryIsHardware = $secondary !== null && $secondary !== '-1';
+        $tftBaudValid = ($primaryIsHardware && $baud1 !== null && (int)$baud1 > 0)
+                     || ($secondaryIsHardware && $baud2 !== null && (int)$baud2 > 0);
+        $checks[] = ['name' => 'At least one Marlin serial interface enabled',
+                     'pass' => $primary !== null || $secondary !== null];
+        $checks[] = ['name' => 'TFT hardware UART enabled on either serial interface',
+                     'pass' => $primaryIsHardware || $secondaryIsHardware];
+        $checks[] = ['name' => 'TFT hardware UART baud enabled', 'pass' => $tftBaudValid];
+        if ($primary !== null && $secondary !== null) {
+            $checks[] = ['name' => 'Primary and secondary serial interfaces are different',
+                         'pass' => $primary !== $secondary];
+        }
     }
 
     $failed = array_values(array_filter($checks, fn ($c) => !($c['pass'] ?? false)));
@@ -598,6 +607,15 @@ $confidence += gate('s1_limits', 'Values within board limits', 10, $range === []
 $confidence += gate('s1_options', 'Drivers/selections valid for board', 10, $option === [], implode('; ', $option));
 
 $conflicts = [];
+if (($vals['e0_auto_fan'] ?? '0') === '1') {
+    $fanPort = (string)($vals['e0_auto_fan_port'] ?? '');
+    if ($fanPort === '' || $fanPort === 'FAN0_PIN') {
+        $conflicts[] = 'Automatic hotend fan must use a dedicated FAN1-or-higher output; FAN0 is reserved for part cooling';
+    }
+    if ((int)($vals['e0_auto_fan_speed'] ?? 0) < 1) {
+        $conflicts[] = 'Automatic hotend fan speed must be at least 1';
+    }
+}
 if (($vals['probe'] ?? 'none') !== 'none') {
     if (abs((float)($vals['probe_off_x'] ?? 0)) >= (float)($vals['bed_x'] ?? 0)
         || abs((float)($vals['probe_off_y'] ?? 0)) >= (float)($vals['bed_y'] ?? 0)) {
@@ -638,9 +656,24 @@ if (($vals['babystep_zprobe'] ?? '0') === '1') {
 $uiPresent = marlin_screen_has_marlinui($board, (string)($vals['screen'] ?? ''));
 $screenForSerial = marlin_selected_screen($board, (string)($vals['screen'] ?? 'none'));
 $screenSerialType = (string)($screenForSerial['type'] ?? 'none');
-if (in_array($screenSerialType, ['serial_tft', 'marlinui_tft'], true)
-    && (string)($vals['serial_port'] ?? '') === '-1') {
-    $conflicts[] = 'A serial/touch TFT uses the primary UART while Native USB is enabled as SERIAL_PORT_2. Select a hardware UART for the primary host interface, or choose a non-serial display';
+$primarySerial = (string)($vals['serial_port'] ?? '');
+$secondarySerial = (string)($vals['serial_port_2'] ?? 'disabled');
+$secondaryEnabled = $secondarySerial !== '' && $secondarySerial !== 'disabled';
+$primaryBaud = (int)($vals['serial_baud'] ?? 0);
+$secondaryBaud = (int)($vals['serial_baud_2'] ?? 0);
+
+if ($secondaryEnabled && $secondarySerial === $primarySerial) {
+    $conflicts[] = 'Primary and secondary serial interfaces cannot use the same port';
+}
+if (in_array($screenSerialType, ['serial_tft', 'marlinui_tft'], true)) {
+    $primaryIsHardware = $primarySerial !== '' && $primarySerial !== '-1';
+    $secondaryIsHardware = $secondaryEnabled && $secondarySerial !== '-1';
+    if (!$primaryIsHardware && !$secondaryIsHardware) {
+        $conflicts[] = 'The selected BTT TFT touch mode requires a hardware UART on either the primary or secondary Marlin serial interface';
+    } elseif (($primaryIsHardware && $primaryBaud <= 0)
+           || ($secondaryIsHardware && $secondaryBaud <= 0)) {
+        $conflicts[] = 'The hardware UART assigned to the BTT TFT must have a valid baud rate';
+    }
 }
 if (!$uiPresent) {
     if (($vals['mmu_menus'] ?? '0') === '1') {
@@ -806,6 +839,18 @@ if ($doc !== null && $effectiveMmu === 'EXTENDABLE_EMU_MMU3') {
         blog($mmuConfigWriteOk
             ? 'MMU12 config: MMU_MODEL set to EXTENDABLE_EMU_MMU3'
             : 'MMU12 config failure: could not update Configuration.h');
+    }
+}
+
+if ($docAdv !== null && ($vals['e0_auto_fan'] ?? '0') === '1') {
+    $expectedFanPort = (string)($vals['e0_auto_fan_port'] ?? 'FAN1_PIN');
+    $actualFan = $docAdv['defines']['E0_AUTO_FAN_PIN'] ?? null;
+    $actualFanValue = trim((string)($actualFan['value'] ?? ''));
+    if ($actualFan === null || !($actualFan['enabled'] ?? false) || $actualFanValue !== $expectedFanPort) {
+        blog('Automatic hotend fan validation failed: E0_AUTO_FAN_PIN is '
+            . ($actualFanValue !== '' ? $actualFanValue : 'unset')
+            . ', expected ' . $expectedFanPort);
+        $docAdv = null;
     }
 }
 

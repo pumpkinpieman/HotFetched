@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.8.0';
+const HF_VERSION = '3.8.2';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -738,6 +738,8 @@ function marlin_field_defs(array $board): array
     $lim     = $board['limits'];
     $drivers = $board['marlin']['valid_drivers'];
     $serialPorts = marlin_serial_ports($board);
+    $secondarySerialOptions = array_merge(['disabled'], $serialPorts);
+    $secondarySerialLabels = ['disabled' => 'Disabled'] + marlin_serial_port_labels($serialPorts);
 
     $eSlots = count(array_filter($board['marlin']['driver_slots'] ?? [], fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
     $eSlots = max(1, $eSlots);
@@ -746,13 +748,32 @@ function marlin_field_defs(array $board): array
         ['key' => 'machine_name', 'label' => 'Machine name', 'group' => 'Machine',
          'type' => 'text', 'maxlen' => 40],
 
-        ['key' => 'serial_port', 'label' => 'Primary host serial interface', 'group' => 'Interface',
+        ['key' => 'e0_auto_fan', 'label' => 'Automatic hotend heatsink fan', 'group' => 'Fan Configuration',
+         'type' => 'bool',
+         'hint' => 'Mission-critical heat-creep protection. Runs the selected fan automatically when E0 reaches the activation temperature.'],
+        ['key' => 'e0_auto_fan_port', 'label' => 'Hotend heatsink fan port', 'group' => 'Fan Configuration',
+         'type' => 'select',
+         'options' => ['FAN1_PIN', 'FAN2_PIN', 'FAN3_PIN', 'FAN4_PIN', 'FAN5_PIN', 'FAN6_PIN', 'FAN7_PIN'],
+         'option_labels' => [
+             'FAN1_PIN' => 'FAN1', 'FAN2_PIN' => 'FAN2', 'FAN3_PIN' => 'FAN3',
+             'FAN4_PIN' => 'FAN4', 'FAN5_PIN' => 'FAN5', 'FAN6_PIN' => 'FAN6', 'FAN7_PIN' => 'FAN7',
+         ],
+         'default' => 'FAN1_PIN', 'requires' => ['e0_auto_fan' => ['1']],
+         'hint' => 'FAN0 is reserved for the normal part-cooling fan. Select a separate board fan output.'],
+        ['key' => 'e0_auto_fan_temp', 'label' => 'Activation temperature (°C)', 'group' => 'Fan Configuration',
+         'type' => 'int', 'min' => 0, 'max' => 250, 'default' => 50,
+         'requires' => ['e0_auto_fan' => ['1']]],
+        ['key' => 'e0_auto_fan_speed', 'label' => 'Automatic fan speed (0-255)', 'group' => 'Fan Configuration',
+         'type' => 'int', 'min' => 1, 'max' => 255, 'default' => 255,
+         'requires' => ['e0_auto_fan' => ['1']]],
+
+        ['key' => 'serial_port', 'label' => 'Primary Marlin serial interface', 'group' => 'Interface',
          'type' => 'select', 'options' => $serialPorts,
          'option_labels' => marlin_serial_port_labels($serialPorts),
          'default' => $serialPorts[0],
-         'hint' => 'Native USB uses -1. UART choices use the board serial header/pins.'],
+         'hint' => 'Native USB uses -1. Hardware UART choices use the board serial header/pins. For SKR 3 EZ + BTT TFT, select UART1 (1).'],
 
-        ['key' => 'serial_baud', 'label' => 'Printer / TFT serial baud rate', 'group' => 'Interface',
+        ['key' => 'serial_baud', 'label' => 'Primary Marlin baud rate', 'group' => 'Interface',
          'type' => 'select',
          'options' => ['2400', '9600', '19200', '38400', '57600', '115200', '250000', '500000', '1000000'],
          'option_labels' => [
@@ -760,7 +781,25 @@ function marlin_field_defs(array $board): array
              '57600' => '57600', '115200' => '115200', '250000' => '250000 (Marlin default)',
              '500000' => '500000', '1000000' => '1000000',
          ],
-         'hint' => 'Must match the printer/TFT connection. MMU baud is configured separately.'],
+         'hint' => 'Must match the device on the selected primary interface. For SKR 3 EZ + BTT TFT, use 115200.'],
+
+        ['key' => 'serial_port_2', 'label' => 'Secondary Marlin serial interface', 'group' => 'Interface',
+         'type' => 'select', 'options' => $secondarySerialOptions,
+         'option_labels' => $secondarySerialLabels,
+         'default' => 'disabled',
+         'hint' => 'Optional second Marlin channel. For SKR 3 EZ + BTT TFT, select Native USB (-1) for the PC connection.'],
+
+        ['key' => 'serial_baud_2', 'label' => 'Secondary Marlin baud rate', 'group' => 'Interface',
+         'type' => 'select',
+         'options' => ['2400', '9600', '19200', '38400', '57600', '115200', '250000', '500000', '1000000'],
+         'option_labels' => [
+             '2400' => '2400', '9600' => '9600', '19200' => '19200', '38400' => '38400',
+             '57600' => '57600', '115200' => '115200 (BTT TFT default)', '250000' => '250000',
+             '500000' => '500000', '1000000' => '1000000',
+         ],
+         'default' => '115200',
+         'requires' => ['serial_port_2' => $serialPorts],
+         'hint' => 'Must match the device on the selected secondary interface. For SKR 3 EZ native USB, 250000 is typical.'],
 
         ['key' => 'driver_x',  'label' => 'X stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_y',  'label' => 'Y stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
@@ -848,6 +887,10 @@ function marlin_current_values(array $doc): array
         'machine_name' => $mn !== null && $mn['enabled'] ? $strip($mn) : null,
         'serial_port' => $num($get('SERIAL_PORT')),
         'serial_baud' => $num($get('BAUDRATE')) ?? '250000',
+        'serial_port_2' => ($get('SERIAL_PORT_2')['enabled'] ?? false)
+            ? ($num($get('SERIAL_PORT_2')) ?? 'disabled') : 'disabled',
+        'serial_baud_2' => ($get('BAUDRATE_2')['enabled'] ?? false)
+            ? ($num($get('BAUDRATE_2')) ?? '115200') : '115200',
         'driver_x'  => $driver($get('X_DRIVER_TYPE')),
         'driver_y'  => $driver($get('Y_DRIVER_TYPE')),
         'driver_z'  => $driver($get('Z_DRIVER_TYPE')),
@@ -873,8 +916,8 @@ function marlin_current_values(array $doc): array
 
 /**
  * Apply validated field values to a parsed Configuration.h document.
- * MOTHERBOARD stays board-locked; SERIAL_PORT is selected from the ports
- * explicitly allowed by the board profile.
+ * MOTHERBOARD stays board-locked; both Marlin serial slots are selected from
+ * the ports explicitly allowed by the board profile.
  * Returns list of applied define names.
  */
 function marlin_apply_values(array &$doc, array $v, array $board): array
@@ -886,7 +929,7 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
         }
     };
 
-    // Board-locked motherboard; validated, user-selectable host interface.
+    // Board-locked motherboard; validated, user-selectable primary interface.
     $set('MOTHERBOARD', (string)$board['marlin']['motherboard']);
     $serialPorts = marlin_serial_ports($board);
     $currentSerial = trim((string)($doc['defines']['SERIAL_PORT']['value'] ?? ''));
@@ -896,6 +939,17 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     }
     $set('SERIAL_PORT', $serialPort);
     $set('BAUDRATE', (string)(int)($v['serial_baud'] ?? 250000));
+
+    // Optional second Marlin channel. A TFT hardware UART may be primary or
+    // secondary; no display selection is allowed to reorder these values.
+    $serialPort2 = (string)($v['serial_port_2'] ?? 'disabled');
+    $serial2Enabled = $serialPort2 !== 'disabled' && in_array($serialPort2, $serialPorts, true);
+    $currentSerial2 = trim((string)($doc['defines']['SERIAL_PORT_2']['value'] ?? '1'));
+    $currentBaud2 = trim((string)($doc['defines']['BAUDRATE_2']['value'] ?? '115200'));
+    $set('SERIAL_PORT_2', $serial2Enabled ? $serialPort2 : ($currentSerial2 !== '' ? $currentSerial2 : '1'), $serial2Enabled);
+    $set('BAUDRATE_2', $serial2Enabled
+        ? (string)(int)($v['serial_baud_2'] ?? 115200)
+        : ($currentBaud2 !== '' ? $currentBaud2 : '115200'), $serial2Enabled);
 
     // Machine
     $name = str_replace('"', '', (string)$v['machine_name']);
@@ -953,6 +1007,41 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     return $applied;
 }
 
+/** Automatic E0 hotend heatsink fan values from Configuration_adv.h. */
+function marlin_current_values_fans(array $adv): array
+{
+    $a = $adv['defines'];
+    $entry = $a['E0_AUTO_FAN_PIN'] ?? null;
+    $raw = $entry !== null && ($entry['enabled'] ?? false)
+        ? trim((string)($entry['value'] ?? '-1')) : '-1';
+    $enabled = $raw !== '' && $raw !== '-1';
+    $num = static function (array $defs, string $key, string $default): string {
+        $e = $defs[$key] ?? null;
+        if ($e === null || $e['value'] === null) return $default;
+        return preg_match('/-?\d+/', (string)$e['value'], $m) ? $m[0] : $default;
+    };
+    return [
+        'e0_auto_fan' => $enabled ? '1' : '0',
+        'e0_auto_fan_port' => $enabled ? $raw : 'FAN1_PIN',
+        'e0_auto_fan_temp' => $num($a, 'EXTRUDER_AUTO_FAN_TEMPERATURE', '50'),
+        'e0_auto_fan_speed' => $num($a, 'EXTRUDER_AUTO_FAN_SPEED', '255'),
+    ];
+}
+
+/** Apply the automatic E0 hotend heatsink fan to Configuration_adv.h. */
+function marlin_apply_values_fans(array &$adv, array $v): array
+{
+    $applied = [];
+    $set = static function (string $key, ?string $value, bool $enable = true) use (&$adv, &$applied): void {
+        if (marlin_config_set($adv, $key, $value, $enable)) $applied[] = $key;
+    };
+    $enabled = ($v['e0_auto_fan'] ?? '0') === '1';
+    $port = (string)($v['e0_auto_fan_port'] ?? 'FAN1_PIN');
+    $set('E0_AUTO_FAN_PIN', $enabled ? $port : '-1', true);
+    $set('EXTRUDER_AUTO_FAN_TEMPERATURE', (string)max(0, min(250, (int)($v['e0_auto_fan_temp'] ?? 50))), true);
+    $set('EXTRUDER_AUTO_FAN_SPEED', (string)max(1, min(255, (int)($v['e0_auto_fan_speed'] ?? 255))), true);
+    return $applied;
+}
 /* ------------------------------------------ Phase 4: display/probe/audio */
 
 const HF_TUNE_PRESETS = [
@@ -1098,13 +1187,24 @@ function marlin_current_values_extended(array $doc, array $board): array
 {
     $d = $doc['defines'];
     $screens = $board['marlin']['screens'] ?? [];
-    $serial2 = (bool)($d['SERIAL_PORT_2']['enabled'] ?? false);
+    $serialValue = static function (string $key) use ($d): ?string {
+        $entry = $d[$key] ?? null;
+        if ($entry === null || !($entry['enabled'] ?? false)) return null;
+        $value = trim((string)($entry['value'] ?? ''));
+        return preg_match('/^-?\d+$/', $value) ? $value : null;
+    };
+    $serial1Value = $serialValue('SERIAL_PORT');
+    $serial2Value = $serialValue('SERIAL_PORT_2');
+    $hasTftSerialPair = $serial1Value !== null
+                     && $serial2Value !== null
+                     && $serial1Value !== $serial2Value
+                     && ($serial1Value !== '-1' || $serial2Value !== '-1');
 
     // Detect combined Marlin-mode + touch TFTs before generic native LCDs.
     // These options share an emulated 12864 define with a native screen, so
     // checking native screens first loses the dual-mode selection on reload.
     $screen = 'none';
-    if ($serial2) {
+    if ($hasTftSerialPair) {
         foreach ($screens as $s) {
             if (($s['type'] ?? '') !== 'marlinui_tft') continue;
             $define = marlin_screen_define($s);
@@ -1126,7 +1226,7 @@ function marlin_current_values_extended(array $doc, array $board): array
         }
     }
 
-    if ($screen === 'none' && $serial2) {
+    if ($screen === 'none' && $hasTftSerialPair) {
         foreach ($screens as $s) {
             if (($s['type'] ?? '') === 'serial_tft') {
                 $screen = (string)$s['id'];
@@ -1206,9 +1306,8 @@ function marlin_apply_values_extended(array &$doc, array $v, array $board): arra
         $set($selectedDefine, $keepValue($selectedDefine), true);
     }
 
-    $isTft = in_array($selectedType, ['serial_tft', 'marlinui_tft'], true);
-    $set('SERIAL_PORT_2', '-1', $isTft);
-    $set('BAUDRATE_2', (string)(int)($v['serial_baud'] ?? 250000), $isTft);
+    // Serial routing is configured explicitly under Interface. Selecting a TFT
+    // never swaps or duplicates SERIAL_PORT / SERIAL_PORT_2 behind the user's back.
 
     // These flags live in Configuration.h, not Configuration_adv.h.
     // A generated 128x64 bitmap is invalid for an HD44780 20x4 character LCD.
