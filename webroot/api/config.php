@@ -97,19 +97,45 @@ switch ($action) {
         }
 
         if ($p['firmware'] === 'klipper') {
-            $detect = json_decode((string)$p['source_detect'], true);
-            $refRel = $board['klipper']['reference_config'] ?? '';
-            $root   = ($detect['root'] ?? '') !== '' ? '/' . $detect['root'] : '';
-            $refTxt = (string)@file_get_contents(project_source_dir((int)$p['id']) . $root . '/config/' . $refRel);
+            $detect = json_decode((string)$p['source_detect'], true) ?: [];
+            $sourceRoot = realpath(project_source_dir((int)$p['id']));
+            $tree = $sourceRoot !== false
+                ? $sourceRoot . (($detect['root'] ?? '') !== '' ? '/' . ltrim((string)$detect['root'], '/') : '')
+                : project_source_dir((int)$p['id']);
+            $ref = klipper_reference_config($board, $tree);
+            if (!($ref['ok'] ?? false)) {
+                json_out(['ok' => false, 'error' => (string)($ref['error'] ?? 'Klipper reference configuration unavailable')], 409);
+            }
+            $refTxt = (string)$ref['text'];
             $fields  = klipper_field_defs($board);
-            $current = klipper_current_values($refTxt);
+            $current = klipper_current_values($refTxt, $board);
             $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
             $stmt->execute([(int)$p['id']]);
             foreach ($stmt->fetchAll() as $row) {
                 $current[$row['field_key']] = $row['field_value'];
             }
             $current = linear_rail_prepare_values($current, $current);
-            json_out(['ok' => true, 'fields' => $fields, 'values' => $current, 'meta' => ['mono_screens' => [], 'event_presets' => HF_EVENT_PRESETS]]);
+            $targets = klipper_mcu_builds($board, board_mcu_variant($board, (string)$p['mcu_variant']) ?? []);
+            $targetMeta = array_map(static fn (array $t): array => [
+                'id' => $t['id'],
+                'label' => $t['label'],
+                'hardware_mcu' => $t['hardware_mcu'],
+                'build_target' => $t['build_target'],
+                'output_artifact' => $t['output_artifact'],
+                'serial' => $t['serial'] ?? null,
+                'baud' => $t['baud'] ?? null,
+            ], $targets);
+            json_out([
+                'ok' => true,
+                'fields' => $fields,
+                'values' => $current,
+                'meta' => [
+                    'mono_screens' => [],
+                    'event_presets' => HF_EVENT_PRESETS,
+                    'reference_config' => $ref['display'] ?? null,
+                    'mcu_builds' => $targetMeta,
+                ],
+            ]);
         }
 
         $adv = marlin_config_parse($advPath);
@@ -121,7 +147,8 @@ switch ($action) {
                                marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                                marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                                marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
-        $current = array_merge(marlin_current_values($doc), marlin_current_values_fans($adv), marlin_current_values_tier1($doc, $adv),
+        $current = array_merge(marlin_current_values($doc), marlin_current_values_sd($doc, $adv, $board),
+                               marlin_current_values_fans($adv), marlin_current_values_tier1($doc, $adv),
                                marlin_current_values_tier2($doc, $adv),
                                marlin_current_values_leveling($doc),
                                marlin_current_values_wifi($adv, $board),
@@ -220,6 +247,15 @@ switch ($action) {
             }
         }
 
+        if (($values['sd_support'] ?? '0') === '1') {
+            if (!isset($doc['defines']['SDSUPPORT'])) {
+                $errors['sd_support'] = 'This imported Marlin version does not expose SDSUPPORT in Configuration.h.';
+            }
+            if (!isset($adv['defines']['SDCARD_CONNECTION'])) {
+                $errors['sd_card_connection'] = 'This imported Marlin version does not expose SDCARD_CONNECTION in Configuration_adv.h.';
+            }
+        }
+
         if ($errors !== []) {
             json_out(['ok' => false, 'error' => 'Validation failed', 'field_errors' => $errors], 422);
         }
@@ -243,6 +279,7 @@ switch ($action) {
         // Apply to both configuration files (surgical line edits).
         $applied = array_merge(
             marlin_apply_values($doc, $values, $board),
+            marlin_apply_values_sd_conf($doc, $values),
             marlin_apply_values_motion($doc, $values),
             marlin_apply_values_tier2_conf($doc, $values),
             marlin_apply_values_leveling($doc, $values),
@@ -252,6 +289,7 @@ switch ($action) {
         );
         $appliedAdv = array_merge(
             marlin_apply_values_adv($adv, $values),
+            marlin_apply_values_sd_adv($adv, $values, $board),
             marlin_apply_values_fans($adv, $values),
             marlin_apply_values_tier2_adv($adv, $values),
             marlin_apply_values_wifi($adv, $values, $board),

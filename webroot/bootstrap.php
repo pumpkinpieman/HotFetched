@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.8.3';
+const HF_VERSION = '3.9.2';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -34,11 +34,10 @@ if (empty($_SESSION['csrf'])) {
 
 function csrf_token(): string { return $_SESSION['csrf']; }
 
-function csrf_verify(?string $token): void
+function csrf_verify(mixed $token): void
 {
     if (!is_string($token) || !hash_equals($_SESSION['csrf'], $token)) {
-        http_response_code(403);
-        json_out(['ok' => false, 'error' => 'CSRF token invalid']);
+        json_out(['ok' => false, 'error' => 'CSRF token invalid'], 403);
     }
 }
 
@@ -728,6 +727,36 @@ function marlin_serial_port_labels(array $ports): array
     return $labels;
 }
 
+
+/**
+ * Return the SD-card connection choices supported by a board profile.
+ * Profiles may narrow this list with marlin.sd_connections. The conservative
+ * fallback covers the two standard Marlin paths used by HotFetched boards.
+ */
+function marlin_sd_connections(array $board): array
+{
+    $supported = ['ONBOARD', 'LCD'];
+    $configured = $board['marlin']['sd_connections'] ?? $supported;
+    $connections = [];
+
+    foreach ((array)$configured as $connection) {
+        $value = strtoupper(trim((string)$connection));
+        if (in_array($value, $supported, true) && !in_array($value, $connections, true)) {
+            $connections[] = $value;
+        }
+    }
+
+    return $connections !== [] ? $connections : ['ONBOARD'];
+}
+
+/** Board-selected default SD-card connection, sanitized against its options. */
+function marlin_sd_default_connection(array $board): string
+{
+    $connections = marlin_sd_connections($board);
+    $preferred = strtoupper(trim((string)($board['marlin']['sd_default_connection'] ?? 'ONBOARD')));
+    return in_array($preferred, $connections, true) ? $preferred : $connections[0];
+}
+
 /**
  * Curated editable fields for a Marlin project, validated against the
  * board definition. Each: key, label, group, type, and constraints.
@@ -740,6 +769,11 @@ function marlin_field_defs(array $board): array
     $serialPorts = marlin_serial_ports($board);
     $secondarySerialOptions = array_merge(['disabled'], $serialPorts);
     $secondarySerialLabels = ['disabled' => 'Disabled'] + marlin_serial_port_labels($serialPorts);
+    $sdConnections = marlin_sd_connections($board);
+    $sdConnectionLabels = [
+        'ONBOARD' => 'Mainboard SD slot (recommended)',
+        'LCD'     => 'Display / EXP SD slot',
+    ];
 
     $eSlots = count(array_filter($board['marlin']['driver_slots'] ?? [], fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
     $eSlots = max(1, $eSlots);
@@ -800,6 +834,16 @@ function marlin_field_defs(array $board): array
          'default' => '115200',
          'requires' => ['serial_port_2' => $serialPorts],
          'hint' => 'Must match the device on the selected secondary interface. For SKR 3 EZ native USB, 250000 is typical.'],
+
+        ['key' => 'sd_support', 'label' => 'Enable SD card printing', 'group' => 'SD Card Printing',
+         'type' => 'bool'],
+        ['key' => 'sd_card_connection', 'label' => 'SD card reader connection', 'group' => 'SD Card Printing',
+         'type' => 'select', 'options' => $sdConnections,
+         'option_labels' => array_intersect_key($sdConnectionLabels, array_flip($sdConnections)),
+         'default' => marlin_sd_default_connection($board),
+         'requires' => ['sd_support' => ['1']],
+         'warning_text' => 'Use the display / EXP slot only when the screen is connected in Marlin mode with its EXP ribbon cables.',
+         'warning_values' => ['LCD']],
 
         ['key' => 'driver_x',  'label' => 'X stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
         ['key' => 'driver_y',  'label' => 'Y stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
@@ -1004,6 +1048,53 @@ function marlin_apply_values(array &$doc, array $v, array $board): array
     $set('TEMP_SENSOR_0',    (string)(int)$v['temp_sensor_0']);
     $set('TEMP_SENSOR_BED',  (string)(int)$v['temp_sensor_bed']);
 
+    return $applied;
+}
+
+
+/** Read SD-card printing settings from Configuration.h / Configuration_adv.h. */
+function marlin_current_values_sd(array $doc, array $adv, array $board): array
+{
+    $support = $doc['defines']['SDSUPPORT'] ?? null;
+    $connection = $adv['defines']['SDCARD_CONNECTION'] ?? null;
+    $allowed = marlin_sd_connections($board);
+    $selected = strtoupper(trim((string)($connection['value'] ?? '')));
+
+    if (!in_array($selected, $allowed, true)) {
+        $selected = marlin_sd_default_connection($board);
+    }
+
+    return [
+        'sd_support' => ($support['enabled'] ?? false) ? '1' : '0',
+        'sd_card_connection' => $selected,
+    ];
+}
+
+/** Apply SDSUPPORT in Configuration.h. */
+function marlin_apply_values_sd_conf(array &$doc, array $v): array
+{
+    $applied = [];
+    $enabled = ($v['sd_support'] ?? '0') === '1';
+    if (marlin_config_set($doc, 'SDSUPPORT', null, $enabled)) {
+        $applied[] = 'SDSUPPORT';
+    }
+    return $applied;
+}
+
+/** Apply SDCARD_CONNECTION in Configuration_adv.h. */
+function marlin_apply_values_sd_adv(array &$adv, array $v, array $board): array
+{
+    $applied = [];
+    $enabled = ($v['sd_support'] ?? '0') === '1';
+    $allowed = marlin_sd_connections($board);
+    $connection = strtoupper(trim((string)($v['sd_card_connection'] ?? '')));
+    if (!in_array($connection, $allowed, true)) {
+        $connection = marlin_sd_default_connection($board);
+    }
+
+    if (marlin_config_set($adv, 'SDCARD_CONNECTION', $connection, $enabled)) {
+        $applied[] = 'SDCARD_CONNECTION';
+    }
     return $applied;
 }
 
@@ -2775,24 +2866,63 @@ function boards_self_check(): array
 
         if (!empty($fs['klipper'])) {
             $k = $b['klipper'] ?? [];
-            if (empty($k['reference_config']) || empty($k['mach']) || empty($k['artifact'])) {
-                $problems[] = "{$id}: incomplete klipper block";
-                continue;
+            if (empty($k['reference_config'])) {
+                $problems[] = "{$id}: Klipper profile has no reference_config";
             }
-            $seed = implode("\n", (array)($k['config_seed'] ?? []));
-            $mach = (string)$k['mach'];
-            // The arch CHOICE parent must be present, not just the sub-model -
-            // without it Kconfig silently keeps its AVR default.
-            $parent = null;
-            if (str_contains($mach, 'STM32'))       { $parent = 'CONFIG_MACH_STM32'; }
-            elseif (str_contains($mach, 'LPC17'))   { $parent = 'CONFIG_MACH_LPC176X'; }
-            elseif (str_contains($mach, 'RP2040'))  { $parent = 'CONFIG_MACH_RPXXXX'; }
-            elseif (str_contains($mach, 'atmega'))  { $parent = 'CONFIG_MACH_AVR'; }
-            if ($parent !== null && !str_contains($seed, $parent . '=y')) {
-                $problems[] = "{$id}: klipper seed is missing the arch parent {$parent} (would build the wrong MCU)";
+            if (($k['reference_source'] ?? 'source') === 'bundled') {
+                $bundled = realpath(__DIR__ . '/boards/configs/' . ltrim((string)($k['reference_config'] ?? ''), '/'));
+                $base = realpath(__DIR__ . '/boards/configs');
+                if ($bundled === false || $base === false
+                    || ($bundled !== $base && !str_starts_with($bundled, $base . DIRECTORY_SEPARATOR))) {
+                    $problems[] = "{$id}: bundled Klipper reference is missing or unsafe";
+                }
             }
-            if (!str_contains($seed, $mach . '=y') && !str_contains($seed, '{MACH}=y')) {
-                $problems[] = "{$id}: klipper seed never selects {$mach}";
+
+            $rawBuilds = $k['mcu_builds'] ?? [[
+                'id' => 'primary',
+                'klipper_mach' => $k['mach'] ?? '',
+                'config_seed' => $k['config_seed'] ?? [],
+                'source_artifact' => $k['artifact'] ?? '',
+                'output_artifact' => $k['artifact'] ?? '',
+            ]];
+            if (!is_array($rawBuilds) || $rawBuilds === []) {
+                $problems[] = "{$id}: no Klipper MCU build targets";
+            } else {
+                $outputNames = [];
+                foreach ($rawBuilds as $idx => $kb) {
+                    if (!is_array($kb)) {
+                        $problems[] = "{$id}: Klipper MCU build #" . ($idx + 1) . ' is malformed';
+                        continue;
+                    }
+                    $targetId = (string)($kb['id'] ?? ('mcu_' . ($idx + 1)));
+                    $mach = (string)($kb['klipper_mach'] ?? $k['mach'] ?? '');
+                    $seed = implode("\n", (array)($kb['config_seed'] ?? $k['config_seed'] ?? []));
+                    $sourceArtifact = basename((string)($kb['source_artifact'] ?? $k['artifact'] ?? ''));
+                    $outputArtifact = basename((string)($kb['output_artifact'] ?? $sourceArtifact));
+                    if ($mach === '' || $seed === '') {
+                        $problems[] = "{$id}: Klipper target '{$targetId}' has no machine/seed";
+                        continue;
+                    }
+                    if ($sourceArtifact === '' || $outputArtifact === '') {
+                        $problems[] = "{$id}: Klipper target '{$targetId}' has no source/output artifact";
+                    }
+                    if (isset($outputNames[strtolower($outputArtifact)])) {
+                        $problems[] = "{$id}: duplicate Klipper output '{$outputArtifact}'";
+                    }
+                    $outputNames[strtolower($outputArtifact)] = true;
+
+                    $parent = null;
+                    if (str_contains($mach, 'STM32'))       { $parent = 'CONFIG_MACH_STM32'; }
+                    elseif (str_contains($mach, 'LPC17'))   { $parent = 'CONFIG_MACH_LPC176X'; }
+                    elseif (str_contains($mach, 'RP2040'))  { $parent = 'CONFIG_MACH_RPXXXX'; }
+                    elseif (str_contains(strtolower($mach), 'atmega')) { $parent = 'CONFIG_MACH_AVR'; }
+                    if ($parent !== null && !str_contains($seed, $parent . '=y')) {
+                        $problems[] = "{$id}: Klipper target '{$targetId}' is missing {$parent}";
+                    }
+                    if (!str_contains($seed, $mach . '=y') && !str_contains($seed, '{MACH}=y')) {
+                        $problems[] = "{$id}: Klipper target '{$targetId}' never selects {$mach}";
+                    }
+                }
             }
         }
 
@@ -3840,61 +3970,194 @@ function marlin_write_motion_hardware_comments(string $path, array $values): boo
 
 /* ---------------------------------------------------- Klipper pipeline */
 
+/** Resolve a Klipper reference configuration from the imported source or HotFetched's bundled board references. */
+function klipper_reference_config(array $board, string $tree): array
+{
+    $kl = $board['klipper'] ?? [];
+    $rel = trim((string)($kl['reference_config'] ?? ''));
+    if ($rel === '') {
+        return ['ok' => false, 'error' => 'Board definition has no Klipper reference_config'];
+    }
+
+    $source = (string)($kl['reference_source'] ?? 'source');
+    if ($source === 'bundled') {
+        $base = realpath(HF_BOARDS_DIR . '/configs');
+        $path = $base !== false ? realpath($base . '/' . ltrim($rel, '/')) : false;
+        $label = 'boards/configs/' . ltrim($rel, '/');
+    } else {
+        $base = realpath(rtrim($tree, '/') . '/config');
+        $path = $base !== false ? realpath($base . '/' . ltrim($rel, '/')) : false;
+        $label = 'config/' . ltrim($rel, '/');
+    }
+
+    if ($base === false || $path === false || !is_file($path)
+        || ($path !== $base && !str_starts_with($path, $base . DIRECTORY_SEPARATOR))) {
+        return ['ok' => false, 'error' => $label . ' not found or escaped its allowed directory', 'display' => $label];
+    }
+    $text = @file_get_contents($path);
+    if (!is_string($text) || trim($text) === '') {
+        return ['ok' => false, 'error' => $label . ' is unreadable or empty', 'display' => $label];
+    }
+    return ['ok' => true, 'path' => $path, 'text' => $text, 'display' => $label, 'source' => $source];
+}
+
+/** Normalize legacy single-MCU boards and newer multi-MCU board profiles into one build list. */
+function klipper_mcu_builds(array $board, array $variant): array
+{
+    $kl = $board['klipper'] ?? [];
+    $raw = $kl['mcu_builds'] ?? null;
+    if (!is_array($raw) || $raw === []) {
+        $raw = [[
+            'id' => 'primary',
+            'label' => 'Primary MCU',
+            'hardware_mcu' => (string)($variant['hardware_mcu'] ?? $variant['label'] ?? ''),
+            'build_target' => (string)($variant['build_target'] ?? $variant['klipper_mcu'] ?? ''),
+            'klipper_mcu' => (string)($variant['klipper_mcu'] ?? ''),
+            'klipper_mach' => (string)($variant['klipper_mach'] ?? $kl['mach'] ?? ''),
+            'source_artifact' => (string)($kl['artifact'] ?? 'klipper.bin'),
+            'output_artifact' => (string)($kl['artifact'] ?? 'klipper.bin'),
+            'config_filename' => 'klipper.config',
+            'primary' => true,
+            'config_seed' => $kl['config_seed'] ?? [],
+            'flash_note' => (string)($kl['flash_note'] ?? ''),
+        ]];
+    }
+
+    $out = [];
+    foreach ($raw as $i => $build) {
+        if (!is_array($build)) continue;
+        $mach = (string)($build['klipper_mach'] ?? $variant['klipper_mach'] ?? $kl['mach'] ?? '');
+        $seedRaw = $build['config_seed'] ?? $kl['config_seed'] ?? [];
+        $seedLines = is_array($seedRaw) ? $seedRaw : [];
+        $seedLines = array_map(static fn ($line): string => str_replace('{MACH}', $mach, (string)$line), $seedLines);
+        $id = preg_replace('/[^A-Za-z0-9_-]+/', '_', (string)($build['id'] ?? 'mcu_' . ($i + 1))) ?: 'mcu_' . ($i + 1);
+        $output = basename((string)($build['output_artifact'] ?? $build['source_artifact'] ?? 'klipper.bin'));
+        $configFilename = basename((string)($build['config_filename'] ?? ($id . '.klipper.config')));
+        $out[] = array_merge($build, [
+            'id' => $id,
+            'label' => (string)($build['label'] ?? ('MCU ' . ($i + 1))),
+            'hardware_mcu' => (string)($build['hardware_mcu'] ?? ''),
+            'build_target' => (string)($build['build_target'] ?? $build['klipper_mcu'] ?? ''),
+            'klipper_mcu' => (string)($build['klipper_mcu'] ?? ''),
+            'klipper_mach' => $mach,
+            'source_artifact' => basename((string)($build['source_artifact'] ?? 'klipper.bin')),
+            'output_artifact' => $output,
+            'config_filename' => $configFilename,
+            'primary' => (bool)($build['primary'] ?? ($i === 0)),
+            'seed' => $seedLines !== [] ? implode("\n", $seedLines) . "\n" : null,
+        ]);
+    }
+    return $out;
+}
+
+/** Return the driver section assigned to each physical stepper. */
+function klipper_driver_sections(array $board): array
+{
+    $map = $board['klipper']['driver_sections'] ?? null;
+    if (is_array($map) && $map !== []) return $map;
+    return [
+        'x' => 'tmc2209 stepper_x',
+        'y' => 'tmc2209 stepper_y',
+        'z' => 'tmc2209 stepper_z',
+        'e' => 'tmc2209 extruder',
+    ];
+}
+
+/** Pull one scalar setting from a Klipper section. */
+function klipper_cfg_value(string $cfg, string $section, string $key): ?string
+{
+    if (!preg_match('/^\[' . preg_quote($section, '/') . '\]\s*\n(.*?)(?=^\[|\z)/ms', $cfg, $m)) {
+        return null;
+    }
+    return preg_match('/^\s*' . preg_quote($key, '/') . '\s*:\s*([^\s#;]+)/m', $m[1], $v)
+        ? trim($v[1]) : null;
+}
+
+/** Validate required sections and immutable hardware assignments in a board reference. */
+function klipper_reference_errors(array $board, string $cfg): array
+{
+    $errors = [];
+    foreach ((array)($board['klipper']['required_sections'] ?? []) as $section) {
+        if (!preg_match('/^\[' . preg_quote((string)$section, '/') . '\]\s*$/m', $cfg)) {
+            $errors[] = 'Missing [' . $section . ']';
+        }
+    }
+    foreach ((array)($board['klipper']['required_settings'] ?? []) as $section => $settings) {
+        foreach ((array)$settings as $key => $expected) {
+            $actual = klipper_cfg_value($cfg, (string)$section, (string)$key);
+            if ($actual === null) {
+                $errors[] = '[' . $section . '] missing ' . $key;
+            } elseif ((string)$actual !== (string)$expected) {
+                $errors[] = '[' . $section . '] ' . $key . '=' . $actual . ' (expected ' . $expected . ')';
+            }
+        }
+    }
+    foreach (klipper_driver_sections($board) as $axis => $section) {
+        if (!preg_match('/^\[' . preg_quote((string)$section, '/') . '\]\s*$/m', $cfg)) {
+            $errors[] = strtoupper((string)$axis) . ' driver section [' . $section . '] is absent';
+        }
+    }
+    return array_values(array_unique($errors));
+}
+
 /** Editable fields for a Klipper project (applied to printer.cfg at build). */
 function klipper_field_defs(array $board): array
 {
     $lim = $board['limits'] ?? [];
-    // Never emit a zero/negative max — a missing limit would otherwise make the
-    // field impossible to satisfy (max < min). Fall back to generous defaults.
     $limMax = fn (string $k, int $default): int => (($v = (int)($lim[$k] ?? 0)) > 0 ? $v : $default);
-    return [
-        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_bed_x', 500))],
-        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_bed_y', 500))],
-        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => max(2000, $limMax('max_z', 600))],
-        ['key' => 'kl_velocity', 'label' => 'max_velocity (mm/s)',  'group' => 'Speed', 'type' => 'int', 'min' => 20,  'max' => 1000],
-        ['key' => 'kl_accel',    'label' => 'max_accel (mm/s²)',    'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 50000],
-        ['key' => 'kl_cur_x',  'label' => 'X run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
-        ['key' => 'kl_cur_y',  'label' => 'Y run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
-        ['key' => 'kl_cur_z',  'label' => 'Z run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
-        ['key' => 'kl_cur_e',  'label' => 'Extruder run_current (A)', 'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
-        ...linear_rail_field_defs(),
+    $fields = [
+        ['key' => 'bed_x',  'label' => 'X travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_x', 2000)],
+        ['key' => 'bed_y',  'label' => 'Y travel / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_bed_y', 2000)],
+        ['key' => 'z_max',  'label' => 'Z height / position_max (mm)', 'group' => 'Geometry', 'type' => 'int', 'min' => 50, 'max' => $limMax('max_z', 2000)],
+        ['key' => 'kl_velocity', 'label' => 'max_velocity (mm/s)', 'group' => 'Speed', 'type' => 'int', 'min' => 20, 'max' => 1000],
+        ['key' => 'kl_accel', 'label' => 'max_accel (mm/s²)', 'group' => 'Speed', 'type' => 'int', 'min' => 100, 'max' => 50000],
     ];
+    $axisLabels = ['x' => 'X', 'y' => 'Y', 'z' => 'Z', 'z1' => 'Z1', 'e' => 'Extruder'];
+    foreach (klipper_driver_sections($board) as $axis => $section) {
+        if (!isset($axisLabels[$axis])) continue;
+        $driver = strtoupper((string)strtok((string)$section, ' '));
+        $fields[] = [
+            'key' => 'kl_cur_' . $axis,
+            'label' => $axisLabels[$axis] . ' run_current (A) — ' . $driver,
+            'group' => 'Stepper Drivers',
+            'type' => 'float',
+            'min' => 0.1,
+            'max' => 3.0,
+        ];
+    }
+    return array_merge($fields, linear_rail_field_defs());
 }
 
 /** Prefill Klipper field values by reading the board's reference printer.cfg. */
-function klipper_current_values(string $refCfg): array
+function klipper_current_values(string $refCfg, array $board = []): array
 {
-    $grab = function (string $section, string $key) use ($refCfg): ?string {
-        if (!preg_match('/^\[' . preg_quote($section, '/') . '\]\s*\n(.*?)(?=^\[|\z)/ms', $refCfg, $m)) {
-            return null;
-        }
-        return preg_match('/^' . preg_quote($key, '/') . '\s*:\s*([^\s#]+)/m', $m[1], $v) ? $v[1] : null;
-    };
     $values = [
-        'bed_x' => $grab('stepper_x', 'position_max') ?? '235',
-        'bed_y' => $grab('stepper_y', 'position_max') ?? '235',
-        'z_max' => $grab('stepper_z', 'position_max') ?? '250',
-        'kl_velocity' => $grab('printer', 'max_velocity') ?? '300',
-        'kl_accel'    => $grab('printer', 'max_accel') ?? '3000',
-        'kl_cur_x' => $grab('tmc2209 stepper_x', 'run_current') ?? '0.8',
-        'kl_cur_y' => $grab('tmc2209 stepper_y', 'run_current') ?? '0.8',
-        'kl_cur_z' => $grab('tmc2209 stepper_z', 'run_current') ?? '0.8',
-        'kl_cur_e' => $grab('tmc2209 extruder', 'run_current') ?? '0.65',
+        'bed_x' => klipper_cfg_value($refCfg, 'stepper_x', 'position_max') ?? '235',
+        'bed_y' => klipper_cfg_value($refCfg, 'stepper_y', 'position_max') ?? '235',
+        'z_max' => klipper_cfg_value($refCfg, 'stepper_z', 'position_max') ?? '250',
+        'kl_velocity' => klipper_cfg_value($refCfg, 'printer', 'max_velocity') ?? '300',
+        'kl_accel' => klipper_cfg_value($refCfg, 'printer', 'max_accel') ?? '3000',
     ];
-    return $values;
+    $defaults = ['x' => '0.8', 'y' => '0.8', 'z' => '0.8', 'z1' => '0.8', 'e' => '0.65'];
+    foreach (klipper_driver_sections($board) as $axis => $section) {
+        $values['kl_cur_' . $axis] = klipper_cfg_value($refCfg, (string)$section, 'run_current')
+            ?? ($defaults[$axis] ?? '0.8');
+    }
+    return linear_rail_prepare_values($values, $values);
 }
 
 /** Apply saved values onto the reference printer.cfg text (surgical). */
-function klipper_generate_printer_cfg(string $refCfg, array $v): string
+function klipper_generate_printer_cfg(string $refCfg, array $v, array $board = []): string
 {
     $setIn = function (string $cfg, string $section, string $key, string $value): string {
         return preg_replace_callback(
             '/(^\[' . preg_quote($section, '/') . '\]\s*\n)(.*?)(?=^\[|\z)/ms',
             function ($m) use ($key, $value) {
-                $body = preg_replace('/^(' . preg_quote($key, '/') . '\s*:\s*)[^\s#]+/m', '${1}' . $value, $m[2], 1, $n);
+                $body = preg_replace('/^(\s*' . preg_quote($key, '/') . '\s*:\s*)[^\s#;]+/m', '${1}' . $value, $m[2], 1, $n);
                 return $m[1] . ($n ? $body : $m[2]);
             },
-            $cfg, 1
+            $cfg,
+            1
         ) ?? $cfg;
     };
     $cfg = $refCfg;
@@ -3903,24 +4166,23 @@ function klipper_generate_printer_cfg(string $refCfg, array $v): string
     $cfg = $setIn($cfg, 'stepper_z', 'position_max', (string)(int)$v['z_max']);
     $cfg = $setIn($cfg, 'printer', 'max_velocity', (string)(int)$v['kl_velocity']);
     $cfg = $setIn($cfg, 'printer', 'max_accel', (string)(int)$v['kl_accel']);
-    foreach (['stepper_x' => 'kl_cur_x', 'stepper_y' => 'kl_cur_y', 'stepper_z' => 'kl_cur_z', 'extruder' => 'kl_cur_e'] as $sec => $key) {
-        $cfg = $setIn($cfg, 'tmc2209 ' . $sec, 'run_current', $v[$key]);
+    foreach (klipper_driver_sections($board) as $axis => $section) {
+        $key = 'kl_cur_' . $axis;
+        if (array_key_exists($key, $v)) {
+            $cfg = $setIn($cfg, (string)$section, 'run_current', (string)$v[$key]);
+        }
     }
     $motion = implode("\n", linear_rail_comment_lines($v, '#')) . "\n";
-    return "# Generated by HotFetched " . HF_VERSION . " from the board reference config\n" . $motion . $cfg;
+    return '# Generated by HotFetched ' . HF_VERSION . " from the board reference config\n" . $motion . $cfg;
 }
 
-/** Build the Klipper .config seed for `make olddefconfig`. */
+/** Backward-compatible single-seed accessor. */
 function klipper_config_seed(array $board, array $variant): ?string
 {
-    $seed = $board['klipper']['config_seed'] ?? null;
-    $mach = $variant['klipper_mach'] ?? ($board['klipper']['mach'] ?? null);
-    if (!is_array($seed) || !is_string($mach) || $mach === '') {
-        return null;
-    }
-    $lines = array_map(fn ($l) => str_replace('{MACH}', $mach, $l), $seed);
-    return implode("\n", $lines) . "\n";
+    $builds = klipper_mcu_builds($board, $variant);
+    return isset($builds[0]['seed']) && is_string($builds[0]['seed']) ? $builds[0]['seed'] : null;
 }
+
 
 // Validate the shipped board catalog once per process. Problems are logged to
 // the container log (docker logs HotFetched), never fatal — a malformed board

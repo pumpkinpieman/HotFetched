@@ -8,7 +8,7 @@ declare(strict_types=1);
  * Confidence gates:
  *   Stage 1 (40) — static validation of saved configuration
  *   Stage 2 (20) — Configuration.h / _adv.h parse + board integrity
- *   Stage 3 (40) — real PlatformIO compile; firmware.bin produced
+ *   Stage 3 (40) — real firmware compile; verified artifact(s) produced
  *   HotFetched v3.8.0 serial-interface selection package
  * 100 means the firmware actually compiled.
  */
@@ -443,6 +443,12 @@ if ($project['firmware'] === 'reprap') {
 }
 
 if ($project['firmware'] === 'klipper') {
+    if ($board === null || $variant === null) {
+        gate('s1_board', 'Board definition resolves', 40, false, 'Board or MCU variant missing');
+        bstate('failed', 0, true);
+        exit(0);
+    }
+
     $stmt = db()->prepare('SELECT field_key, field_value FROM config_values WHERE project_id = ?');
     $stmt->execute([(int)$project['id']]);
     $saved = [];
@@ -464,17 +470,31 @@ if ($project['firmware'] === 'klipper') {
         exit(0);
     }
 
-    $detect = json_decode((string)$project['source_detect'], true);
-    $root   = realpath(project_source_dir((int)$project['id']));
-    $tree   = $root . (($detect['root'] ?? '') !== '' ? '/' . $detect['root'] : '');
-    $refRel = (string)($board['klipper']['reference_config'] ?? '');
-    $refTxt = @file_get_contents($tree . '/config/' . $refRel);
-    $seed   = klipper_config_seed($board, $variant);
+    $detect = json_decode((string)$project['source_detect'], true) ?: [];
+    $root = realpath(project_source_dir((int)$project['id']));
+    if ($root === false) {
+        gate('s2_ref', 'Klipper source and board reference resolve', 8, false, 'Imported source directory is missing');
+        bstate('failed', $confidence, true);
+        exit(0);
+    }
+    $tree = $root . (($detect['root'] ?? '') !== '' ? '/' . ltrim((string)$detect['root'], '/') : '');
+    $ref = klipper_reference_config($board, $tree);
+    $refTxt = ($ref['ok'] ?? false) ? (string)$ref['text'] : '';
+    $targets = klipper_mcu_builds($board, $variant);
+    $seedErrors = [];
+    foreach ($targets as $target) {
+        if (!is_string($target['seed'] ?? null) || trim((string)$target['seed']) === '') {
+            $seedErrors[] = (string)($target['label'] ?? $target['id']) . ': missing MCU seed';
+        }
+    }
+    $profileErrors = $refTxt !== '' ? klipper_reference_errors($board, $refTxt) : [];
+    if (count($targets) < 1) $profileErrors[] = 'No MCU build targets resolved';
 
-    $confidence += gate('s2_ref', 'Board reference printer.cfg present', 10, is_string($refTxt) && $refTxt !== '',
-        is_string($refTxt) ? '' : 'config/' . $refRel . ' not found in source tree');
-    $confidence += gate('s2_seed', 'MCU firmware options resolve for this board', 10, $seed !== null,
-        $seed !== null ? '' : 'Board definition lacks a Klipper config seed');
+    $confidence += gate('s2_ref', 'Klipper source and board reference resolve', 8, ($ref['ok'] ?? false) === true,
+        ($ref['ok'] ?? false) ? (string)($ref['display'] ?? '') : (string)($ref['error'] ?? 'Reference unavailable'));
+    $confidence += gate('s2_seed', 'All MCU firmware options resolve', 7, $seedErrors === [], implode('; ', $seedErrors));
+    $confidence += gate('s2_profile', 'Multi-MCU and stepper-driver profile is internally consistent', 5, $profileErrors === [],
+        implode('; ', $profileErrors));
     if ($confidence < 60) {
         bstate('failed', $confidence, true);
         exit(0);
@@ -484,40 +504,116 @@ if ($project['firmware'] === 'klipper') {
     $klipperConfig = $tree . '/.config';
     $klipperConfigExisted = is_file($klipperConfig);
     if ($klipperConfigExisted) source_patch_backup($klipperConfig);
-    $configWrote = @file_put_contents($klipperConfig, $seed) !== false;
-    blog('Klipper .config seed:');
-    foreach (explode("\n", trim((string)$seed)) as $line) blog('  ' . $line);
 
-    // Remove every prior output before compiling so an old klipper.bin cannot be
-    // mistaken for a successful build after a compiler failure.
-    build_tree_remove($tree . '/out');
-    $compileStarted = time();
-    $cmd = 'cd ' . escapeshellarg($tree)
-         . ' && env HOME=/tmp timeout 900 sh -c ' . escapeshellarg('make olddefconfig && make -j2')
-         . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
-    $exit = $configWrote ? (int)trim((string)shell_exec($cmd)) : 1;
+    $configDir = $buildDir . '/mcu-configs';
+    @mkdir($configDir, 0775, true);
+    $artifactRecords = [];
+    $targetResults = [];
+    $allCompilerOk = true;
+    $allArtifactsOk = true;
+    $allMcuConfigsOk = true;
 
-    $artifact = (string)($board['klipper']['artifact'] ?? 'klipper.bin');
-    $bin = $tree . '/out/' . $artifact;
-    $compilerOk = $configWrote && $exit === 0 && is_file($bin) && (int)@filesize($bin) > 0
-        && (int)@filemtime($bin) >= $compileStarted - 2;
-    $compileDetail = '';
-    if (!$compilerOk) {
-        $tail = (string)@shell_exec('grep -iE "error|failed" ' . escapeshellarg($logPath) . ' | tail -8');
-        $compileDetail = !$configWrote ? 'Could not write Klipper .config'
-            : ($exit === 124 ? 'Build timed out (15 min)'
-            : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit . ' or produced no fresh artifact'));
+    blog('Klipper build targets: ' . count($targets));
+    foreach ($targets as $index => $target) {
+        $targetId = (string)$target['id'];
+        $targetLabel = (string)$target['label'];
+        $seed = (string)$target['seed'];
+        $sourceArtifact = basename((string)$target['source_artifact']);
+        $outputArtifact = basename((string)$target['output_artifact']);
+        $configFilename = basename((string)$target['config_filename']);
+
+        blog('--- MCU target ' . ($index + 1) . '/' . count($targets) . ': ' . $targetLabel . ' [' . $targetId . '] ---');
+        blog('Hardware: ' . ((string)($target['hardware_mcu'] ?? '') ?: 'not specified'));
+        blog('Klipper target: ' . ((string)($target['build_target'] ?? '') ?: (string)($target['klipper_mcu'] ?? '')));
+        blog('Output: ' . $outputArtifact);
+        foreach (explode("\n", trim($seed)) as $line) blog('  ' . $line);
+
+        $configWrote = @file_put_contents($klipperConfig, $seed) !== false;
+        $configSnapshotPath = $configDir . '/' . $configFilename;
+        $configSnapshotOk = @file_put_contents($configSnapshotPath, $seed) !== false;
+        build_tree_remove($tree . '/out');
+        $compileStarted = time();
+        $cmd = 'cd ' . escapeshellarg($tree)
+             . ' && env HOME=/tmp timeout 900 sh -c ' . escapeshellarg('make olddefconfig && make -j2')
+             . ' >> ' . escapeshellarg($logPath) . ' 2>&1; echo $?';
+        $exit = $configWrote ? (int)trim((string)shell_exec($cmd)) : 1;
+        if (is_file($klipperConfig)) {
+            $configSnapshotOk = @copy($klipperConfig, $configSnapshotPath);
+        }
+        $allMcuConfigsOk = $allMcuConfigsOk && $configSnapshotOk;
+
+        $bin = $tree . '/out/' . $sourceArtifact;
+        $compilerOk = $configWrote && $exit === 0 && is_file($bin) && (int)@filesize($bin) > 0
+            && (int)@filemtime($bin) >= $compileStarted - 2;
+        $compileDetail = '';
+        if (!$compilerOk) {
+            $tail = (string)@shell_exec('grep -iE "error|failed" ' . escapeshellarg($logPath) . ' | tail -8');
+            $compileDetail = !$configWrote ? 'Could not write Klipper .config'
+                : ($exit === 124 ? 'Build timed out (15 min)'
+                : ((trim($tail) !== '') ? trim($tail) : 'make exited ' . $exit . ' or produced no fresh ' . $sourceArtifact));
+        }
+        $allCompilerOk = $allCompilerOk && $compilerOk;
+
+        $dest = $buildDir . '/' . $outputArtifact;
+        @unlink($dest);
+        $artifactOk = $compilerOk && @copy($bin, $dest) && is_file($dest)
+            && (int)@filesize($dest) === (int)@filesize($bin);
+        $allArtifactsOk = $allArtifactsOk && $artifactOk;
+        if ($artifactOk) {
+            $record = [
+                'id' => $targetId,
+                'label' => $targetLabel,
+                'filename' => $outputArtifact,
+                'bytes' => (int)filesize($dest),
+                'sha256' => hash_file('sha256', $dest),
+                'hardware_mcu' => (string)($target['hardware_mcu'] ?? ''),
+                'build_target' => (string)($target['build_target'] ?? ''),
+                'klipper_mcu' => (string)($target['klipper_mcu'] ?? ''),
+                'klipper_machine' => (string)($target['klipper_mach'] ?? ''),
+                'serial' => $target['serial'] ?? null,
+                'baud' => $target['baud'] ?? null,
+                'primary' => (bool)($target['primary'] ?? false),
+                'config_filename' => $configFilename,
+                'config_sha256' => $configSnapshotOk ? hash_file('sha256', $configSnapshotPath) : null,
+                'flash_note' => (string)($target['flash_note'] ?? ''),
+            ];
+            $artifactRecords[] = $record;
+            blog($outputArtifact . ': ' . number_format((float)$record['bytes']) . ' bytes, SHA-256 ' . $record['sha256']);
+        } else {
+            blog('FAILED ' . $targetLabel . ': ' . ($compileDetail !== '' ? $compileDetail : 'artifact export failed'));
+        }
+        $targetResults[] = [
+            'id' => $targetId,
+            'label' => $targetLabel,
+            'exit_code' => $exit,
+            'compiler_ok' => $compilerOk,
+            'artifact_ok' => $artifactOk,
+            'config_snapshot_ok' => $configSnapshotOk,
+            'detail' => $compileDetail,
+        ];
     }
-    $confidence += gate('s3_make', 'Clean Klipper MCU compile', 30, $compilerOk, $compileDetail);
 
-    $dest = $buildDir . '/' . $artifact;
-    @unlink($dest);
-    $artifactOk = $compilerOk && @copy($bin, $dest) && is_file($dest)
-        && (int)@filesize($dest) === (int)@filesize($bin);
-    $artifactDetail = $artifactOk
-        ? $artifact . ', ' . number_format((float)filesize($dest)) . ' bytes, SHA-256 ' . hash_file('sha256', $dest)
-        : 'Klipper artifact copy or size verification failed';
-    $confidence += gate('s3_artifact', 'Fresh Klipper artifact exported and verified', 5, $artifactOk, $artifactDetail);
+    $compileFailures = array_values(array_filter($targetResults, static fn (array $r): bool => !$r['compiler_ok']));
+    $compileDetail = $compileFailures === []
+        ? count($targetResults) . '/' . count($targetResults) . ' MCU targets compiled from clean output directories'
+        : implode('; ', array_map(static fn (array $r): string => $r['label'] . ': ' . ($r['detail'] ?: 'compile failed'), $compileFailures));
+    $confidence += gate('s3_make', 'Clean Klipper compile for every MCU target', 30, $allCompilerOk, $compileDetail);
+
+    $artifactDetail = $allArtifactsOk && count($artifactRecords) === count($targets)
+        ? implode('; ', array_map(static fn (array $a): string => $a['filename'] . ' (' . number_format((float)$a['bytes']) . ' bytes)', $artifactRecords))
+        : 'One or more MCU artifacts failed copy or size verification';
+    $confidence += gate('s3_artifact', 'Every MCU artifact exported and verified', 5,
+        $allArtifactsOk && count($artifactRecords) === count($targets), $artifactDetail);
+
+    $primary = null;
+    foreach ($artifactRecords as $record) {
+        if ($record['primary']) { $primary = $record; break; }
+    }
+    if ($primary === null && $artifactRecords !== []) $primary = $artifactRecords[0];
+
+    $printerCfg = klipper_generate_printer_cfg($refTxt, $vals, $board);
+    $printerCfgPath = $buildDir . '/printer.cfg';
+    $printerCfgOk = @file_put_contents($printerCfgPath, $printerCfg) !== false;
 
     $manifestPath = $buildDir . '/compiler-manifest.json';
     $manifest = [
@@ -527,44 +623,112 @@ if ($project['firmware'] === 'klipper') {
         'firmware' => 'klipper',
         'board' => ['id' => (string)$board['id'], 'name' => (string)$board['name']],
         'motion_hardware' => linear_rail_metadata($vals),
-        'mcu' => [
+        'reference_config' => [
+            'display' => $ref['display'] ?? null,
+            'source' => $ref['source'] ?? null,
+            'sha256' => hash('sha256', $refTxt),
+        ],
+        'mcu_variant' => [
             'variant_id' => (string)($variant['id'] ?? ''),
             'label' => (string)($variant['label'] ?? ''),
-            'klipper_mcu' => (string)($variant['klipper_mcu'] ?? ''),
-            'klipper_machine' => (string)($variant['klipper_mach'] ?? ''),
+            'hardware_mcu' => (string)($variant['hardware_mcu'] ?? ''),
+            'build_target' => (string)($variant['build_target'] ?? ''),
         ],
-        'artifact' => $artifactOk ? [
-            'filename' => $artifact,
-            'bytes' => (int)filesize($dest),
-            'sha256' => hash_file('sha256', $dest),
-        ] : null,
-        'compiler' => ['exit_code' => $exit, 'clean_output_directory' => true],
+        'mcus' => array_map(static fn (array $a): array => [
+            'id' => $a['id'],
+            'label' => $a['label'],
+            'hardware_mcu' => $a['hardware_mcu'],
+            'build_target' => $a['build_target'],
+            'klipper_mcu' => $a['klipper_mcu'],
+            'klipper_machine' => $a['klipper_machine'],
+            'serial' => $a['serial'],
+            'baud' => $a['baud'],
+            'config_filename' => $a['config_filename'],
+        ], $artifactRecords),
+        'artifacts' => $artifactRecords,
+        'compiler' => ['targets' => $targetResults, 'clean_output_directory' => true],
     ];
     $manifestOk = compiler_manifest_write($manifestPath, $manifest);
-    $boardPostOk = $compilerOk && $artifactOk && $manifestOk
-        && (string)($variant['klipper_mcu'] ?? '') !== '';
-    $confidence += gate('s3_board', 'Klipper board and MCU target verified after compilation', 5, $boardPostOk,
-        $boardPostOk ? 'MCU seed, fresh artifact, and compiler manifest verified' : 'Klipper board/MCU post-build verification failed');
 
-    $built = $compilerOk && $artifactOk && $boardPostOk;
-    if ($built) {
-        db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')->execute([$dest, $buildId]);
-        blog($artifact . ': ' . number_format((float)filesize($dest)) . ' bytes — ' . (string)($board['klipper']['flash_note'] ?? ''));
+    $artifactIndexPath = $buildDir . '/build-artifacts.json';
+    $artifactIndex = [
+        'primary' => $primary['id'] ?? null,
+        'bundle' => 'firmware-bundle.zip',
+        'items' => $artifactRecords,
+    ];
+    $artifactIndexOk = compiler_manifest_write($artifactIndexPath, $artifactIndex);
 
-        $printerCfg = klipper_generate_printer_cfg((string)$refTxt, $vals);
-        @file_put_contents($buildDir . '/printer.cfg', $printerCfg);
-        $zip = new ZipArchive();
-        if ($zip->open($buildDir . '/config-bundle.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
-            $zip->addFromString('printer.cfg', $printerCfg);
-            $zip->addFromString('klipper.config', (string)$seed);
-            $zip->addFile($manifestPath, 'compiler-manifest.json');
-            $zip->addFile($logPath, 'build.log');
-            $zip->addFromString('FLASHING.txt', (string)($board['klipper']['flash_note'] ?? '') . "\nHost side: place printer.cfg in your Klipper host config directory and set the [mcu] serial.");
-            $zip->close();
-        }
+    $flashLines = [
+        'HotFetched ' . HF_VERSION . ' — ' . (string)$board['name'],
+        '',
+        (string)($board['klipper']['flash_note'] ?? ''),
+        '',
+        'Generated MCU images:',
+    ];
+    foreach ($artifactRecords as $a) {
+        $flashLines[] = '- ' . $a['label'] . ': firmware/' . $a['id'] . '/' . $a['filename'];
+        $flashLines[] = '  Hardware: ' . ($a['hardware_mcu'] ?: 'not specified');
+        $flashLines[] = '  Build target: ' . ($a['build_target'] ?: $a['klipper_mcu']);
+        if ($a['serial']) $flashLines[] = '  Host serial: ' . $a['serial'] . ($a['baud'] ? ' at ' . $a['baud'] . ' baud' : '');
+        if ($a['flash_note']) $flashLines[] = '  ' . $a['flash_note'];
     }
+    $flashLines[] = '';
+    $flashLines[] = 'Host configuration: place configs/printer.cfg in the matching FreeDi environment. It references FreeDi include files.';
+    $flashLines[] = 'Safety: keep the stock backup, verify the printer revision and currents, and never interchange mainboard and toolhead images.';
+    $flashText = implode("\n", $flashLines) . "\n";
+    $flashPath = $buildDir . '/FLASHING.txt';
+    @file_put_contents($flashPath, $flashText);
+
+    $zipOk = false;
+    $firmwareZipPath = $buildDir . '/firmware-bundle.zip';
+    $zip = new ZipArchive();
+    if ($zip->open($firmwareZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+        foreach ($artifactRecords as $a) {
+            $zip->addFile($buildDir . '/' . $a['filename'], 'firmware/' . $a['id'] . '/' . $a['filename']);
+        }
+        $zip->addFile($printerCfgPath, 'configs/printer.cfg');
+        foreach ($artifactRecords as $a) {
+            $zip->addFile($configDir . '/' . $a['config_filename'], 'configs/mcu/' . $a['config_filename']);
+        }
+        $zip->addFile($flashPath, 'docs/FLASHING.txt');
+        $zip->addFile($manifestPath, 'metadata/compiler-manifest.json');
+        $zip->addFile($artifactIndexPath, 'metadata/build-artifacts.json');
+        $zip->addFile($logPath, 'logs/build.log');
+        $zipOk = $zip->close();
+    }
+
+    $configZipPath = $buildDir . '/config-bundle.zip';
+    $configZipOk = false;
+    $zip = new ZipArchive();
+    if ($zip->open($configZipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true) {
+        $zip->addFile($printerCfgPath, 'configs/printer.cfg');
+        foreach ($artifactRecords as $a) {
+            $zip->addFile($configDir . '/' . $a['config_filename'], 'configs/mcu/' . $a['config_filename']);
+        }
+        $zip->addFile($flashPath, 'docs/FLASHING.txt');
+        $zip->addFile($manifestPath, 'metadata/compiler-manifest.json');
+        $zip->addFile($artifactIndexPath, 'metadata/build-artifacts.json');
+        $zip->addFile($logPath, 'logs/build.log');
+        $configZipOk = $zip->close();
+    }
+
+    $boardPostOk = $allCompilerOk && $allArtifactsOk && $allMcuConfigsOk && $printerCfgOk && $manifestOk && $artifactIndexOk
+        && $zipOk && $configZipOk && $profileErrors === [] && $primary !== null;
+    $confidence += gate('s3_board', 'Board targets, generated config, manifests, and bundles verified', 5, $boardPostOk,
+        $boardPostOk ? count($artifactRecords) . ' MCU artifacts and both structured ZIP bundles verified'
+                     : 'Post-build verification or ZIP bundle creation failed');
+
+    $built = $boardPostOk && $confidence === 100;
+    if ($built && $primary !== null) {
+        $primaryPath = $buildDir . '/' . $primary['filename'];
+        db()->prepare('UPDATE builds SET artifact_path = ? WHERE id = ?')->execute([$primaryPath, $buildId]);
+        blog('Primary firmware: ' . $primary['filename']);
+        blog('Firmware bundle: firmware-bundle.zip');
+    }
+
     build_tree_remove($tree . '/out');
     if (!$klipperConfigExisted) @unlink($klipperConfig);
+    source_patch_restore_all();
     bstate($built ? 'success' : 'failed', $confidence, true);
     db()->prepare("UPDATE projects SET updated_at = datetime('now') WHERE id = ?")->execute([(int)$project['id']]);
     exit(0);
@@ -664,6 +828,12 @@ $secondarySerial = (string)($vals['serial_port_2'] ?? 'disabled');
 $secondaryEnabled = $secondarySerial !== '' && $secondarySerial !== 'disabled';
 $primaryBaud = (int)($vals['serial_baud'] ?? 0);
 $secondaryBaud = (int)($vals['serial_baud_2'] ?? 0);
+
+if (($vals['sd_support'] ?? '0') === '1'
+    && ($vals['sd_card_connection'] ?? 'ONBOARD') === 'LCD'
+    && !$uiPresent) {
+    $conflicts[] = 'The display / EXP SD slot requires a Marlin-mode LCD connected through the EXP ribbon cables. Select the mainboard SD slot, or choose a Marlin-mode display.';
+}
 
 if ($secondaryEnabled && $secondarySerial === $primarySerial) {
     $conflicts[] = 'Primary and secondary serial interfaces cannot use the same port';
