@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.8.2';
+const HF_VERSION = '3.8.3';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -3609,6 +3609,235 @@ function marlin_apply_values_adv(array &$adv, array $v, array $board = []): arra
     return $applied;
 }
 
+/* ----------------------------------------- Linear motion hardware metadata */
+
+/**
+ * Firmware-neutral linear-rail fields shared by Marlin and Klipper projects.
+ * These values are descriptive metadata only; they never become firmware
+ * directives and never alter motor current, steps, speed, or acceleration.
+ */
+function linear_rail_field_defs(): array
+{
+    $fields = [];
+    $sizes = ['7', '9', '12', '15'];
+    $sizeLabels = [
+        '7' => 'MGN7 rail',
+        '9' => 'MGN9 rail',
+        '12' => 'MGN12 rail',
+        '15' => 'MGN15 rail',
+    ];
+    $carriageLabels = [
+        'c' => 'C — standard carriage',
+        'h' => 'H — long carriage',
+    ];
+
+    foreach (['x' => 'X', 'y' => 'Y', 'z' => 'Z'] as $axis => $label) {
+        $group = 'Linear Rails — ' . $label . ' Axis';
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_family',
+            'label' => $label . '-axis linear guide',
+            'group' => $group,
+            'type' => 'select',
+            'options' => ['none', 'mgn'],
+            'option_labels' => [
+                'none' => 'Not specified',
+                'mgn' => 'MGN miniature linear rail',
+            ],
+            'default' => 'none',
+        ];
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_size',
+            'label' => 'Rail size',
+            'group' => $group,
+            'type' => 'select',
+            'options' => $sizes,
+            'option_labels' => $sizeLabels,
+            'default' => '12',
+            'requires' => ['rail_' . $axis . '_family' => 'mgn'],
+        ];
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_carriage',
+            'label' => 'Carriage / block length',
+            'group' => $group,
+            'type' => 'select',
+            'options' => ['c', 'h'],
+            'option_labels' => $carriageLabels,
+            'default' => 'h',
+            'requires' => ['rail_' . $axis . '_family' => 'mgn'],
+        ];
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_count',
+            'label' => 'Number of rails',
+            'group' => $group,
+            'type' => 'int',
+            'min' => 1,
+            'max' => 4,
+            'requires' => ['rail_' . $axis . '_family' => 'mgn'],
+        ];
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_blocks_per_rail',
+            'label' => 'Carriages / blocks per rail',
+            'group' => $group,
+            'type' => 'int',
+            'min' => 1,
+            'max' => 4,
+            'requires' => ['rail_' . $axis . '_family' => 'mgn'],
+        ];
+        $fields[] = [
+            'key' => 'rail_' . $axis . '_length',
+            'label' => 'Rail length (mm)',
+            'group' => $group,
+            'type' => 'int',
+            'min' => 50,
+            'max' => 2000,
+            'requires' => ['rail_' . $axis . '_family' => 'mgn'],
+        ];
+    }
+    return $fields;
+}
+
+/** Default values used by new projects and when migrating legacy Klipper keys. */
+function linear_rail_default_values(array $geometry = []): array
+{
+    $length = [
+        'x' => max(50, min(2000, (int)($geometry['bed_x'] ?? 300))),
+        'y' => max(50, min(2000, (int)($geometry['bed_y'] ?? 300))),
+        'z' => max(50, min(2000, (int)($geometry['z_max'] ?? 300))),
+    ];
+    $out = [];
+    foreach (['x', 'y', 'z'] as $axis) {
+        $out['rail_' . $axis . '_family'] = 'none';
+        $out['rail_' . $axis . '_size'] = '12';
+        $out['rail_' . $axis . '_carriage'] = 'h';
+        $out['rail_' . $axis . '_count'] = '1';
+        $out['rail_' . $axis . '_blocks_per_rail'] = '1';
+        $out['rail_' . $axis . '_length'] = (string)$length[$axis];
+    }
+    return $out;
+}
+
+/**
+ * Add defaults and migrate the former Klipper-only kl_rail_x/y/z values.
+ * Explicit shared fields always win over legacy values.
+ */
+function linear_rail_prepare_values(array $values, array $geometry = []): array
+{
+    $rail = linear_rail_default_values($geometry);
+    foreach (array_keys($rail) as $key) {
+        if (array_key_exists($key, $values) && (string)$values[$key] !== '') {
+            $rail[$key] = (string)$values[$key];
+        }
+    }
+
+    foreach (['x', 'y', 'z'] as $axis) {
+        $familyKey = 'rail_' . $axis . '_family';
+        if (array_key_exists($familyKey, $values) && trim((string)$values[$familyKey]) !== '') {
+            continue;
+        }
+        $legacy = strtolower(trim((string)($values['kl_rail_' . $axis] ?? '')));
+        if (preg_match('/^mgn(7|9|12|15)(?:_mgn\\1)?([ch])$/', $legacy, $m)) {
+            $rail[$familyKey] = 'mgn';
+            $rail['rail_' . $axis . '_size'] = $m[1];
+            $rail['rail_' . $axis . '_carriage'] = $m[2];
+        }
+    }
+
+    return array_replace($values, $rail);
+}
+
+/** Structured X/Y/Z rail metadata for compiler manifests. */
+function linear_rail_metadata(array $values): array
+{
+    $values = linear_rail_prepare_values($values, $values);
+    $axes = [];
+    foreach (['x' => 'X', 'y' => 'Y', 'z' => 'Z'] as $axis => $label) {
+        if (($values['rail_' . $axis . '_family'] ?? 'none') !== 'mgn') {
+            $axes[$axis] = [
+                'axis' => $label,
+                'specified' => false,
+            ];
+            continue;
+        }
+        $size = (int)$values['rail_' . $axis . '_size'];
+        $carriage = strtoupper((string)$values['rail_' . $axis . '_carriage']);
+        $axes[$axis] = [
+            'axis' => $label,
+            'specified' => true,
+            'family' => 'MGN',
+            'rail_size_mm' => $size,
+            'carriage_type' => $carriage,
+            'designation' => 'MGN' . $size . $carriage,
+            'rail_count' => (int)$values['rail_' . $axis . '_count'],
+            'blocks_per_rail' => (int)$values['rail_' . $axis . '_blocks_per_rail'],
+            'rail_length_mm' => (int)$values['rail_' . $axis . '_length'],
+        ];
+    }
+    return ['axes' => $axes];
+}
+
+/** Human-readable comment lines for generated configuration files. */
+function linear_rail_comment_lines(array $values, string $prefix): array
+{
+    $meta = linear_rail_metadata($values);
+    $lines = [$prefix . ' Linear motion hardware metadata (informational only)'];
+    foreach ($meta['axes'] as $axis) {
+        if (!$axis['specified']) {
+            $lines[] = $prefix . ' ' . $axis['axis'] . ' axis: not specified';
+            continue;
+        }
+        $rails = $axis['rail_count'] === 1 ? 'rail' : 'rails';
+        $blocks = $axis['blocks_per_rail'] === 1 ? 'block' : 'blocks';
+        $lines[] = sprintf(
+            '%s %s axis: %d x MGN%d %s, MGN%d%s carriage, %d %s per rail, %d mm',
+            $prefix,
+            $axis['axis'],
+            $axis['rail_count'],
+            $axis['rail_size_mm'],
+            $rails,
+            $axis['rail_size_mm'],
+            $axis['carriage_type'],
+            $axis['blocks_per_rail'],
+            $blocks,
+            $axis['rail_length_mm']
+        );
+    }
+    return $lines;
+}
+
+/** Prepend or replace HotFetched's idempotent metadata block in Configuration.h. */
+function marlin_write_motion_hardware_comments(string $path, array $values): bool
+{
+    $text = @file_get_contents($path);
+    if (!is_string($text)) {
+        return false;
+    }
+    $eol = str_contains($text, "\r\n") ? "\r\n" : "\n";
+    $begin = '// <HOTFETCHED_MOTION_HARDWARE>';
+    $end = '// </HOTFETCHED_MOTION_HARDWARE>';
+    $pattern = '/^' . preg_quote($begin, '/') . '.*?^' . preg_quote($end, '/') . '\\R*/ms';
+    $clean = preg_replace($pattern, '', $text, 1) ?? $text;
+    $block = implode($eol, array_merge([$begin], linear_rail_comment_lines($values, '//'), [$end])) . $eol . $eol;
+    $updated = $block . ltrim($clean, "\r\n");
+    if ($updated === $text) {
+        return true;
+    }
+
+    $tmp = $path . '.hf-motion-' . bin2hex(random_bytes(6));
+    $mode = @fileperms($path);
+    if (@file_put_contents($tmp, $updated, LOCK_EX) === false) {
+        @unlink($tmp);
+        return false;
+    }
+    if ($mode !== false) {
+        @chmod($tmp, $mode & 0777);
+    }
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
 /* ---------------------------------------------------- Klipper pipeline */
 
 /** Editable fields for a Klipper project (applied to printer.cfg at build). */
@@ -3628,6 +3857,7 @@ function klipper_field_defs(array $board): array
         ['key' => 'kl_cur_y',  'label' => 'Y run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
         ['key' => 'kl_cur_z',  'label' => 'Z run_current (A)',  'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
         ['key' => 'kl_cur_e',  'label' => 'Extruder run_current (A)', 'group' => 'Stepper Drivers', 'type' => 'float', 'min' => 0.1, 'max' => 2.0],
+        ...linear_rail_field_defs(),
     ];
 }
 
@@ -3640,7 +3870,7 @@ function klipper_current_values(string $refCfg): array
         }
         return preg_match('/^' . preg_quote($key, '/') . '\s*:\s*([^\s#]+)/m', $m[1], $v) ? $v[1] : null;
     };
-    return [
+    $values = [
         'bed_x' => $grab('stepper_x', 'position_max') ?? '235',
         'bed_y' => $grab('stepper_y', 'position_max') ?? '235',
         'z_max' => $grab('stepper_z', 'position_max') ?? '250',
@@ -3651,6 +3881,7 @@ function klipper_current_values(string $refCfg): array
         'kl_cur_z' => $grab('tmc2209 stepper_z', 'run_current') ?? '0.8',
         'kl_cur_e' => $grab('tmc2209 extruder', 'run_current') ?? '0.65',
     ];
+    return $values;
 }
 
 /** Apply saved values onto the reference printer.cfg text (surgical). */
@@ -3675,7 +3906,8 @@ function klipper_generate_printer_cfg(string $refCfg, array $v): string
     foreach (['stepper_x' => 'kl_cur_x', 'stepper_y' => 'kl_cur_y', 'stepper_z' => 'kl_cur_z', 'extruder' => 'kl_cur_e'] as $sec => $key) {
         $cfg = $setIn($cfg, 'tmc2209 ' . $sec, 'run_current', $v[$key]);
     }
-    return "# Generated by HotFetched " . HF_VERSION . " from the board reference config\n" . $cfg;
+    $motion = implode("\n", linear_rail_comment_lines($v, '#')) . "\n";
+    return "# Generated by HotFetched " . HF_VERSION . " from the board reference config\n" . $motion . $cfg;
 }
 
 /** Build the Klipper .config seed for `make olddefconfig`. */

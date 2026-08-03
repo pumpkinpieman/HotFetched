@@ -108,6 +108,7 @@ switch ($action) {
             foreach ($stmt->fetchAll() as $row) {
                 $current[$row['field_key']] = $row['field_value'];
             }
+            $current = linear_rail_prepare_values($current, $current);
             json_out(['ok' => true, 'fields' => $fields, 'values' => $current, 'meta' => ['mono_screens' => [], 'event_presets' => HF_EVENT_PRESETS]]);
         }
 
@@ -116,7 +117,7 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Unable to read Configuration_adv.h'], 500);
         }
         $fields  = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
-                               marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                               linear_rail_field_defs(), marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
                                marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                                marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                                marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
@@ -135,6 +136,7 @@ switch ($action) {
         foreach ($stmt->fetchAll() as $row) {
             $current[$row['field_key']] = $row['field_value'];
         }
+        $current = linear_rail_prepare_values($current, $current);
 
         $mono = [];
         $extFw = [];
@@ -179,6 +181,7 @@ switch ($action) {
         if ($p['firmware'] === 'klipper') {
             $fields = klipper_field_defs($board);
             $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
+            $input = linear_rail_prepare_values($input, $input);
             [$values, $errors] = hf_validate_fields($fields, $input);
             if ($errors !== []) {
                 json_out(['ok' => false, 'error' => 'Validation failed', 'field_errors' => $errors], 422);
@@ -200,11 +203,12 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Unable to read Configuration_adv.h'], 500);
         }
         $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
-                              marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                              linear_rail_field_defs(), marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
                               marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                               marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                               marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
+        $input = linear_rail_prepare_values($input, $input);
         [$values, $errors] = hf_validate_fields($fields, $input);
 
         if (($values['e0_auto_fan'] ?? '0') === '1') {
@@ -257,6 +261,9 @@ switch ($action) {
         );
         if (!marlin_config_write($doc, $confPath)) {
             json_out(['ok' => false, 'error' => 'Could not write Configuration.h'], 500);
+        }
+        if (!marlin_write_motion_hardware_comments($confPath, $values)) {
+            json_out(['ok' => false, 'error' => 'Could not write linear-motion metadata to Configuration.h'], 500);
         }
         if ($appliedAdv !== [] && !marlin_config_write($adv, $advPath)) {
             json_out(['ok' => false, 'error' => 'Could not write Configuration_adv.h'], 500);

@@ -29,6 +29,47 @@ function hf_artifact_mime(string $filename): string
         default => 'application/octet-stream',
     };
 }
+/** Read and validate the per-build multi-artifact index. */
+function hf_build_artifact_records(string $dir): array
+{
+    $path = $dir . '/build-artifacts.json';
+    if (!is_file($path)) return [];
+    $doc = json_decode((string)@file_get_contents($path), true);
+    if (!is_array($doc) || !is_array($doc['items'] ?? null)) return [];
+    $records = [];
+    foreach ($doc['items'] as $item) {
+        if (!is_array($item)) continue;
+        $name = basename((string)($item['filename'] ?? ''));
+        $file = $name !== '' ? realpath($dir . '/' . $name) : false;
+        if ($file === false || !is_file($file) || !str_starts_with($file, $dir . DIRECTORY_SEPARATOR)) continue;
+        $records[] = [
+            'id' => (string)($item['id'] ?? pathinfo($name, PATHINFO_FILENAME)),
+            'label' => (string)($item['label'] ?? $name),
+            'filename' => $name,
+            'bytes' => (int)($item['bytes'] ?? filesize($file)),
+            'sha256' => (string)($item['sha256'] ?? ''),
+            'hardware_mcu' => (string)($item['hardware_mcu'] ?? ''),
+            'build_target' => (string)($item['build_target'] ?? ''),
+            'serial' => $item['serial'] ?? null,
+            'baud' => $item['baud'] ?? null,
+            'primary' => (bool)($item['primary'] ?? false),
+            'flash_note' => (string)($item['flash_note'] ?? ''),
+        ];
+    }
+    return $records;
+}
+
+function hf_primary_artifact(array $records, ?string $fallback = null): ?array
+{
+    foreach ($records as $record) {
+        if (!empty($record['primary'])) return $record;
+    }
+    if ($records !== []) return $records[0];
+    if ($fallback !== null && $fallback !== '') {
+        return ['id' => 'primary', 'label' => 'Firmware', 'filename' => basename($fallback), 'primary' => true];
+    }
+    return null;
+}
 
 /* ------------------------------------------------ GET: artifact download */
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
@@ -57,22 +98,33 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         exit('Build directory not found');
     }
 
+    $records = hf_build_artifact_records($dir);
     if ($type === 'firmware') {
         $storedPath = is_string($build['artifact_path']) ? $build['artifact_path'] : '';
-        $artifactName = $storedPath !== '' ? basename($storedPath) : 'firmware.bin';
+        $primary = hf_primary_artifact($records, $storedPath !== '' ? basename($storedPath) : null);
+        $artifactName = $primary['filename'] ?? 'firmware.bin';
         $candidate = $storedPath !== '' ? realpath($storedPath) : false;
-
-        // Older rows may contain a relative/stale artifact_path. Fall back to
-        // resolving the real filename inside this build directory.
-        if ($candidate === false) {
-            $candidate = realpath($dir . '/' . $artifactName);
-        }
+        if ($candidate === false) $candidate = realpath($dir . '/' . $artifactName);
         $file = $candidate;
+        $mime = hf_artifact_mime($artifactName);
+    } elseif ($type === 'artifact') {
+        $requested = basename((string)($_GET['name'] ?? ''));
+        $match = null;
+        foreach ($records as $record) {
+            if (hash_equals($record['filename'], $requested)) { $match = $record; break; }
+        }
+        if ($match === null) {
+            http_response_code(404);
+            exit('Firmware artifact not found');
+        }
+        $artifactName = $match['filename'];
+        $file = realpath($dir . '/' . $artifactName);
         $mime = hf_artifact_mime($artifactName);
     } else {
         $map = [
+            'firmware_bundle' => ['firmware-bundle.zip', 'application/zip'],
             'config' => ['config-bundle.zip', 'application/zip'],
-            'log'    => ['build.log', 'text/plain; charset=utf-8'],
+            'log' => ['build.log', 'text/plain; charset=utf-8'],
         ];
         if (!isset($map[$type])) {
             http_response_code(404);
@@ -87,7 +139,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
         exit('Artifact not available');
     }
 
-    $downloadName = hf_download_name((string)$build['pname'], (int)$build['id'], $artifactName);
+    $downloadName = $type === 'artifact'
+        ? basename($artifactName)
+        : hf_download_name((string)$build['pname'], (int)$build['id'], $artifactName);
     $encodedName = rawurlencode($downloadName);
 
     // Prevent stale output, MIME guessing, compression, or proxy transforms.
@@ -194,10 +248,13 @@ switch ($action) {
             }
         }
 
-        $artifactName = 'firmware.bin';
-        if (is_string($build['artifact_path']) && $build['artifact_path'] !== '') {
-            $artifactName = basename($build['artifact_path']);
-        }
+        $buildDirPath = realpath(build_dir((int)$build['project_id'], (int)$build['id']));
+        $artifactFiles = $buildDirPath !== false ? hf_build_artifact_records($buildDirPath) : [];
+        $storedArtifact = is_string($build['artifact_path']) && $build['artifact_path'] !== ''
+            ? basename($build['artifact_path']) : '';
+        $primaryArtifact = hf_primary_artifact($artifactFiles, $storedArtifact);
+        $artifactName = $primaryArtifact['filename'] ?? ($storedArtifact !== '' ? $storedArtifact : 'firmware.bin');
+        $hasFirmwareBundle = $buildDirPath !== false && is_file($buildDirPath . '/firmware-bundle.zip');
 
         $flashNote = '';
         $project = project_get((int)$build['project_id']);
@@ -232,10 +289,12 @@ switch ($action) {
             'finished_at'   => $build['finished_at'],
             'flash_note'    => $flashNote,
             'artifact_name' => $artifactName,
-            'artifacts'     => [
+            'artifact_files' => $artifactFiles,
+            'artifacts' => [
                 'firmware' => $build['status'] === 'success' && $build['artifact_path'] !== null,
-                'config'   => $build['status'] === 'success',
-                'log'      => $build['log_path'] !== null,
+                'firmware_bundle' => $build['status'] === 'success' && $hasFirmwareBundle,
+                'config' => $build['status'] === 'success',
+                'log' => $build['log_path'] !== null,
             ],
         ]);
     }
@@ -246,11 +305,22 @@ switch ($action) {
             json_out(['ok' => false, 'error' => 'Invalid project id'], 422);
         }
         $stmt = db()->prepare(
-            'SELECT id, status, confidence, started_at, finished_at '
+            'SELECT id, status, confidence, started_at, finished_at, artifact_path '
             . 'FROM builds WHERE project_id = ? ORDER BY id DESC LIMIT 25'
         );
         $stmt->execute([$projectId]);
-        json_out(['ok' => true, 'builds' => $stmt->fetchAll()]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$row) {
+            $dir = realpath(build_dir($projectId, (int)$row['id']));
+            $records = $dir !== false ? hf_build_artifact_records($dir) : [];
+            $primary = hf_primary_artifact($records, is_string($row['artifact_path']) ? basename($row['artifact_path']) : null);
+            $row['primary_artifact'] = $primary['filename'] ?? 'firmware.bin';
+            $row['artifact_count'] = count($records) ?: (($row['artifact_path'] ?? null) !== null ? 1 : 0);
+            $row['has_firmware_bundle'] = $dir !== false && is_file($dir . '/firmware-bundle.zip');
+            unset($row['artifact_path']);
+        }
+        unset($row);
+        json_out(['ok' => true, 'builds' => $rows]);
     }
 
     default:

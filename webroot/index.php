@@ -64,7 +64,7 @@ $boards = board_defs();
                 <label>Motherboard
                     <select name="board_id" id="boardSel" required></select>
                 </label>
-                <label>MCU variant <span class="hint">(check the chip silkscreen)</span>
+                <label><span id="mcuLabel">MCU variant</span> <span class="hint" id="mcuHint">(check the chip silkscreen)</span>
                     <select name="mcu_variant" id="mcuSel" required></select>
                 </label>
             </div>
@@ -101,11 +101,31 @@ $boards = board_defs();
         </table>
         <?php endif; ?>
     </section>
+
+    <section class="panel conversion-launch">
+        <div class="conversion-launch-copy">
+            <div>
+                <span class="tag fw-klipper">New standalone function</span>
+                <h2>Klipper Conversion Assistant</h2>
+                <p class="hint">
+                    Build a board-specific backup, firmware-build, flashing, verification, and recovery kit
+                    without adding conversion controls to a normal Klipper project. Initial support targets
+                    Prusa MK3/MK3S/MK3S+ printers using the Einsy RAMBo.
+                </p>
+            </div>
+            <a class="btn primary" href="conversion.php">Open Conversion Assistant</a>
+        </div>
+        <div class="conversion-launch-notes">
+            <span><b>Separate workflow</b> No project or build record is changed.</span>
+            <span><b>Manual hardware writes</b> HotFetched generates scripts but never runs AVRDUDE from the browser.</span>
+            <span><b>Recovery first</b> The package requires a verified ATmega32U2 backup before bridge flashing.</span>
+        </div>
+    </section>
 </main>
 
 <script>
-const CSRF   = <?= json_encode(csrf_token()) ?>;
-const BOARDS = <?= json_encode(array_values($boards), JSON_UNESCAPED_SLASHES) ?>;
+const CSRF   = <?= json_encode(csrf_token(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+const BOARDS = <?= json_encode(array_values($boards), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 
 const boardSel = document.getElementById('boardSel');
 const mcuSel   = document.getElementById('mcuSel');
@@ -136,6 +156,10 @@ function fillMcu() {
     const b = BOARDS.find(x => x.id === boardSel.value);
     mcuSel.innerHTML = '';
     if (!b) return;
+    const label = document.getElementById('mcuLabel');
+    const hint = document.getElementById('mcuHint');
+    if (label) label.textContent = b.mcu_selector_label || 'MCU variant';
+    if (hint) hint.textContent = b.mcu_selector_label ? '(profile compiles every listed MCU)' : '(check the chip silkscreen)';
     for (const v of b.mcu_variants) {
         const o = document.createElement('option');
         o.value = v.id;

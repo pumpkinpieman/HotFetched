@@ -454,6 +454,7 @@ if ($project['firmware'] === 'klipper') {
         bstate('failed', 0, true);
         exit(0);
     }
+    $saved = linear_rail_prepare_values($saved, $saved);
     $fields = klipper_field_defs($board);
     [$vals, $errors] = hf_validate_fields($fields, $saved);
     $confidence += gate('s1_valid', 'Configuration values valid and within limits', 40, $errors === [],
@@ -525,6 +526,7 @@ if ($project['firmware'] === 'klipper') {
         'built_at_utc' => gmdate('c'),
         'firmware' => 'klipper',
         'board' => ['id' => (string)$board['id'], 'name' => (string)$board['name']],
+        'motion_hardware' => linear_rail_metadata($vals),
         'mcu' => [
             'variant_id' => (string)($variant['id'] ?? ''),
             'label' => (string)($variant['label'] ?? ''),
@@ -589,8 +591,9 @@ if ($saved === []) {
     exit(0);
 }
 
+$saved = linear_rail_prepare_values($saved, $saved);
 $fields = array_merge(marlin_field_defs($board), marlin_field_defs_motion($board),
-                      marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
+                      linear_rail_field_defs(), marlin_field_defs_adv($board), marlin_field_defs_tier2($board),
                       marlin_field_defs_leveling($board), marlin_field_defs_wifi($board),
                       marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                       marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
@@ -775,6 +778,14 @@ $confRel = $detect['files']['configuration'] ?? '';
 $advRel  = $detect['files']['configuration_adv'] ?? '';
 $confPath = $root !== false ? realpath($root . '/' . $confRel) : false;
 $advPath  = $root !== false ? realpath($root . '/' . $advRel) : false;
+
+if ($confPath !== false && str_starts_with((string)$confPath, $root . '/')) {
+    $motionMetaOk = source_patch_backup((string)$confPath)
+        && marlin_write_motion_hardware_comments((string)$confPath, $vals);
+    if (!$motionMetaOk) {
+        blog('Linear-motion metadata warning: Configuration.h comments could not be updated');
+    }
+}
 
 $doc    = ($confPath !== false && str_starts_with((string)$confPath, $root . '/')) ? marlin_config_parse($confPath) : null;
 $docAdv = ($advPath !== false && str_starts_with((string)$advPath, $root . '/')) ? marlin_config_parse($advPath) : null;
@@ -1099,6 +1110,7 @@ $manifest = [
         'name' => (string)$board['name'],
         'motherboard' => $expectedMb,
     ],
+    'motion_hardware' => linear_rail_metadata($vals),
     'mcu' => [
         'variant_id' => (string)($variant['id'] ?? ''),
         'label' => (string)($variant['label'] ?? ''),

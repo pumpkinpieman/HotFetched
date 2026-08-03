@@ -22,6 +22,10 @@ $detect  = $project['source_detect'] !== null ? json_decode((string)$project['so
 // therefore always available.
 $isRrf     = $project['firmware'] === 'reprap';
 $cfgReady  = $isRrf || $project['source_state'] === 'ready';
+$klipperBuilds = ($fwKey === 'klipper' && is_array($board) && is_array($variant))
+    ? klipper_mcu_builds($board, $variant)
+    : [];
+$isMultiKlipper = count($klipperBuilds) > 1;
 ?>
 <!doctype html>
 <html lang="en">
@@ -52,8 +56,16 @@ $cfgReady  = $isRrf || $project['source_state'] === 'ready';
             <div><span>MOTHERBOARD</span><b><code><?= h($board['marlin']['motherboard']) ?></code></b></div>
             <div><span>PIO env</span><b><code><?= h($variant['marlin_env'] ?? '—') ?></code></b></div>
             <?php elseif ($fwKey === 'klipper' && $board): ?>
-            <div><span>Klipper MCU</span><b><code><?= h($variant['klipper_mcu'] ?? '—') ?></code></b></div>
-            <div><span>Flash offset</span><b><code><?= h($board['klipper']['kconfig']['FLASH_APPLICATION_ADDRESS'] ?? '—') ?></code></b></div>
+                <?php foreach ($klipperBuilds as $target): ?>
+                <div>
+                    <span><?= h((string)$target['label']) ?></span>
+                    <b><code><?= h((string)($target['hardware_mcu'] ?: 'MCU')) ?> → <?= h((string)($target['build_target'] ?: $target['klipper_mcu'])) ?></code></b>
+                </div>
+                <div>
+                    <span><?= h((string)$target['label']) ?> output</span>
+                    <b><code><?= h((string)$target['output_artifact']) ?></code><?= !empty($target['serial']) ? ' · ' . h((string)$target['serial']) : '' ?></b>
+                </div>
+                <?php endforeach; ?>
             <?php endif; ?>
         </div>
     </section>
@@ -231,9 +243,19 @@ $cfgReady  = $isRrf || $project['source_state'] === 'ready';
         <?php if (!$cfgReady): ?>
             <p class="empty">Import a firmware source and submit a configuration to build.</p>
         <?php else: ?>
+            <?php if ($fwKey === 'klipper' && $klipperBuilds !== []): ?>
+            <div class="kv" style="margin-bottom:14px">
+                <?php foreach ($klipperBuilds as $target): ?>
+                <div>
+                    <span><?= h((string)$target['label']) ?></span>
+                    <b><code><?= h((string)($target['build_target'] ?: $target['klipper_mcu'])) ?></code> → <code><?= h((string)$target['output_artifact']) ?></code></b>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
             <div class="actions" style="margin-bottom:12px">
-                <button class="btn primary" id="buildStartBtn" type="button">Start Build</button>
-                <span class="msg" id="buildMsg">100% confidence = the firmware actually compiled.</span>
+                <button class="btn primary" id="buildStartBtn" type="button"><?= $isMultiKlipper ? 'Compile ' . count($klipperBuilds) . ' MCU Firmwares' : 'Start Build' ?></button>
+                <span class="msg" id="buildMsg">100% confidence = every required firmware target actually compiled.</span>
             </div>
             <div id="buildCard" hidden>
                 <div class="kv" style="margin-bottom:10px">
@@ -246,7 +268,8 @@ $cfgReady  = $isRrf || $project['source_state'] === 'ready';
                 <div id="bGates" class="gates"></div>
                 <pre id="bLog" class="build-log" hidden></pre>
                 <div class="actions" id="bDownloads" hidden>
-                    <a class="btn primary" id="dlFw" href="#">Download firmware.bin</a>
+                    <span id="fwDownloads" style="display:contents"></span>
+                    <a class="btn primary" id="dlFwBundle" href="#" hidden>Download firmware bundle (.zip)</a>
                     <a class="btn" id="dlCfg" href="#">Export config bundle (.zip)</a>
                     <a class="btn" id="dlLog" href="#">Build log</a>
                 </div>
@@ -1498,13 +1521,27 @@ async function buildPoll() {
         buildTimer = null;
         buildBtn.disabled = false;
         if (s.status === 'success') {
-            const art = s.artifact_name || 'firmware.bin';
             const note = s.flash_note ? (' \u2014 ' + s.flash_note) : '';
             el('buildMsg').textContent = 'Build succeeded at ' + conf + '%' + note;
             el('bDownloads').hidden = false;
-            const dlFw = el('dlFw');
-            dlFw.href = 'api/build.php?download=' + BUILD_ID + '&type=firmware';
-            dlFw.textContent = 'Download ' + art;
+            const fwBox = el('fwDownloads');
+            fwBox.innerHTML = '';
+            const files = Array.isArray(s.artifact_files) && s.artifact_files.length
+                ? s.artifact_files
+                : [{ filename: s.artifact_name || 'firmware.bin', label: 'Firmware' }];
+            for (const file of files) {
+                const a = document.createElement('a');
+                a.className = files.length > 1 ? 'btn' : 'btn primary';
+                a.href = files.length > 1
+                    ? 'api/build.php?download=' + BUILD_ID + '&type=artifact&name=' + encodeURIComponent(file.filename)
+                    : 'api/build.php?download=' + BUILD_ID + '&type=firmware';
+                a.textContent = 'Download ' + file.filename;
+                a.title = [file.label, file.hardware_mcu, file.build_target].filter(Boolean).join(' — ');
+                fwBox.appendChild(a);
+            }
+            const bundle = el('dlFwBundle');
+            bundle.hidden = !(s.artifacts && s.artifacts.firmware_bundle);
+            if (!bundle.hidden) bundle.href = 'api/build.php?download=' + BUILD_ID + '&type=firmware_bundle';
             el('dlCfg').href = 'api/build.php?download=' + BUILD_ID + '&type=config';
             el('dlLog').href = 'api/build.php?download=' + BUILD_ID + '&type=log';
         } else {
@@ -1528,7 +1565,7 @@ async function buildHistoryRefresh() {
             + '<td>' + (b.started_at || '\u2014') + '</td>'
             + '<td>' + (b.finished_at || '\u2014') + '</td>'
             + '<td>' + (b.status === 'success'
-                ? '<a class="plink" href="api/build.php?download=' + b.id + '&type=firmware">firmware</a> \u00b7 <a class="plink" href="api/build.php?download=' + b.id + '&type=config">config</a>'
+                ? '<a class="plink" href="api/build.php?download=' + b.id + '&type=' + (b.has_firmware_bundle ? 'firmware_bundle' : 'firmware') + '">' + (b.artifact_count > 1 ? 'firmware bundle (' + b.artifact_count + ')' : (b.primary_artifact || 'firmware')) + '</a> \u00b7 <a class="plink" href="api/build.php?download=' + b.id + '&type=config">config</a>'
                 : (b.status === 'failed' ? '<a class="plink" href="api/build.php?download=' + b.id + '&type=log">log</a>' : '')) + '</td>';
         tb.appendChild(tr);
     }
@@ -1546,7 +1583,7 @@ if (buildBtn) {
             return;
         }
         BUILD_ID = res.build_id;
-        el('buildMsg').textContent = 'Build #' + BUILD_ID + ' running\u2026 first build downloads the STM32 toolchain (several minutes).';
+        el('buildMsg').textContent = 'Build #' + BUILD_ID + ' running\u2026 each MCU target is compiled from a clean output directory.';
         buildTimer = setInterval(buildPoll, 2500);
         buildPoll();
     });
