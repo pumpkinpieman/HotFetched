@@ -136,7 +136,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "LCD"
+    ],
+    "sd_default_connection": "LCD"
   },
   "limits": {
     "max_bed_x": 250,

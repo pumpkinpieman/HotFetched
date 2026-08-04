@@ -134,7 +134,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "ONBOARD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "klipper": {
     "reference_config": "generic-mks-robin-e3.cfg",

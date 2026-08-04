@@ -137,7 +137,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "ONBOARD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "limits": {
     "max_bed_x": 300,

@@ -132,7 +132,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "ONBOARD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "klipper": {
     "reference_config": "generic-bigtreetech-skr-mini-e3-v3.0.cfg",

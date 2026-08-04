@@ -109,7 +109,11 @@
           "BLTOUCH"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "LCD"
+    ],
+    "sd_default_connection": "LCD"
   },
   "limits": {
     "max_bed_x": 2000,

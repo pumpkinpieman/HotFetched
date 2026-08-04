@@ -138,7 +138,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "ONBOARD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "klipper": {
     "reference_config": "generic-mellow-fly-e3-v2.cfg",

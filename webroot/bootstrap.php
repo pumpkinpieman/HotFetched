@@ -9,7 +9,7 @@ declare(strict_types=1);
  *  - all writes parameterized; no string interpolation into SQL
  */
 
-const HF_VERSION = '3.9.2';
+const HF_VERSION = '3.9.8';
 
 define('HF_PRIVATE_DIR', getenv('PRIVATE_DIR') ?: '/var/www/html/private');
 define('HF_DB_PATH', HF_PRIVATE_DIR . '/hotfetched.sqlite');
@@ -729,14 +729,13 @@ function marlin_serial_port_labels(array $ports): array
 
 
 /**
- * Return the SD-card connection choices supported by a board profile.
- * Profiles may narrow this list with marlin.sd_connections. The conservative
- * fallback covers the two standard Marlin paths used by HotFetched boards.
+ * Return the explicitly-audited SD-card connection choices for a board.
+ * Every Marlin-capable board profile must declare marlin.sd_connections.
  */
 function marlin_sd_connections(array $board): array
 {
     $supported = ['ONBOARD', 'LCD'];
-    $configured = $board['marlin']['sd_connections'] ?? $supported;
+    $configured = $board['marlin']['sd_connections'] ?? [];
     $connections = [];
 
     foreach ((array)$configured as $connection) {
@@ -746,6 +745,8 @@ function marlin_sd_connections(array $board): array
         }
     }
 
+    // Catalog validation catches missing metadata. Keep a safe UI fallback so
+    // a malformed local profile cannot expose an empty select control.
     return $connections !== [] ? $connections : ['ONBOARD'];
 }
 
@@ -753,8 +754,27 @@ function marlin_sd_connections(array $board): array
 function marlin_sd_default_connection(array $board): string
 {
     $connections = marlin_sd_connections($board);
-    $preferred = strtoupper(trim((string)($board['marlin']['sd_default_connection'] ?? 'ONBOARD')));
+    $preferred = strtoupper(trim((string)($board['marlin']['sd_default_connection'] ?? $connections[0])));
     return in_array($preferred, $connections, true) ? $preferred : $connections[0];
+}
+
+/** User-facing labels for board-approved SD routes. */
+function marlin_sd_connection_labels(array $board): array
+{
+    $boardName = trim((string)($board['name'] ?? 'Mainboard'));
+    return [
+        'ONBOARD' => $boardName . ' onboard SD slot',
+        'LCD'     => 'Wired LCD / EXP SD reader',
+    ];
+}
+
+/** Guidance used when a BTT TFT slot is mistaken for a native Marlin LCD slot. */
+function marlin_sd_tft_guidance(array $board): string
+{
+    if (in_array('ONBOARD', marlin_sd_connections($board), true)) {
+        return 'Select the ' . trim((string)($board['name'] ?? 'mainboard')) . ' onboard SD slot.';
+    }
+    return 'Use a genuine wired LCD SD reader connected through EXP1/EXP2, or disable Marlin SD printing.';
 }
 
 /**
@@ -770,10 +790,7 @@ function marlin_field_defs(array $board): array
     $secondarySerialOptions = array_merge(['disabled'], $serialPorts);
     $secondarySerialLabels = ['disabled' => 'Disabled'] + marlin_serial_port_labels($serialPorts);
     $sdConnections = marlin_sd_connections($board);
-    $sdConnectionLabels = [
-        'ONBOARD' => 'Mainboard SD slot (recommended)',
-        'LCD'     => 'Display / EXP SD slot',
-    ];
+    $sdConnectionLabels = marlin_sd_connection_labels($board);
 
     $eSlots = count(array_filter($board['marlin']['driver_slots'] ?? [], fn ($s) => str_starts_with(strtoupper((string)$s), 'E')));
     $eSlots = max(1, $eSlots);
@@ -842,7 +859,7 @@ function marlin_field_defs(array $board): array
          'option_labels' => array_intersect_key($sdConnectionLabels, array_flip($sdConnections)),
          'default' => marlin_sd_default_connection($board),
          'requires' => ['sd_support' => ['1']],
-         'warning_text' => 'Use the display / EXP slot only when the screen is connected in Marlin mode with its EXP ribbon cables.',
+         'warning_text' => 'LCD means a genuine wired display SD reader exposed to Marlin through EXP2. A BTT TFT35/TFT70 SD slot is managed by TFT firmware and is not this Marlin LCD route.',
          'warning_values' => ['LCD']],
 
         ['key' => 'driver_x',  'label' => 'X stepper driver',  'group' => 'Stepper Drivers', 'type' => 'select', 'options' => $drivers],
@@ -1453,6 +1470,20 @@ function marlin_field_defs_tier2(array $board): array
         ['key' => 'bed_ki', 'label' => 'Bed Ki', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 999, 'requires' => ['pid_bed' => ['1']]],
         ['key' => 'bed_kd', 'label' => 'Bed Kd', 'group' => 'PID Tuning', 'type' => 'float', 'min' => 0, 'max' => 9999, 'requires' => ['pid_bed' => ['1']]],
 
+        ['key' => 'bed_protection_period', 'label' => 'Bed thermal-runaway period (seconds)',
+         'group' => 'Bed Thermal Safety', 'type' => 'int', 'min' => 5, 'max' => 300, 'default' => 40,
+         'warning_text' => 'How long the bed may remain outside the allowed target range after heating has settled. Developer-recommended value: 40 seconds.'],
+        ['key' => 'bed_protection_hysteresis', 'label' => 'Bed thermal-runaway hysteresis (°C)',
+         'group' => 'Bed Thermal Safety', 'type' => 'int', 'min' => 1, 'max' => 20, 'default' => 4,
+         'warning_text' => 'Allowed temperature deviation from target before the runaway timer starts. Developer-recommended value: 4°C.'],
+
+        ['key' => 'bed_watch_period', 'label' => 'Bed heating watch period (seconds)',
+         'group' => 'Bed Thermal Safety', 'type' => 'int', 'min' => 30, 'max' => 600, 'default' => 60,
+         'warning_text' => 'Extends the time Marlin allows the bed to achieve the required temperature rise. Thermal protection remains enabled.'],
+        ['key' => 'bed_watch_increase', 'label' => 'Required bed temperature rise (°C)',
+         'group' => 'Bed Thermal Safety', 'type' => 'int', 'min' => 2, 'max' => 10, 'default' => 2,
+         'warning_text' => 'Keep this at 2°C for a slow but functional heatbed. HotFetched will not allow a value below 2°C.'],
+
         ['key' => 'lin_advance', 'label' => 'Linear Advance', 'group' => 'Tuning', 'type' => 'bool'],
         ['key' => 'advance_k', 'label' => 'Advance K factor', 'group' => 'Tuning', 'type' => 'float', 'min' => 0, 'max' => 10, 'requires' => ['lin_advance' => ['1']]],
 
@@ -1488,6 +1519,10 @@ function marlin_current_values_tier2(array $doc, array $adv): array
         'bed_kp' => $num($d, 'DEFAULT_BED_KP') ?? '10.00',
         'bed_ki' => $num($d, 'DEFAULT_BED_KI') ?? '0.023',
         'bed_kd' => $num($d, 'DEFAULT_BED_KD') ?? '305.4',
+        'bed_protection_period' => $num($a, 'THERMAL_PROTECTION_BED_PERIOD') ?? '40',
+        'bed_protection_hysteresis' => $num($a, 'THERMAL_PROTECTION_BED_HYSTERESIS') ?? '4',
+        'bed_watch_period' => $num($a, 'WATCH_BED_TEMP_PERIOD') ?? '60',
+        'bed_watch_increase' => $num($a, 'WATCH_BED_TEMP_INCREASE') ?? '2',
         'lin_advance' => $on($a, 'LIN_ADVANCE'),
         'advance_k' => $ak !== null ? rtrim(rtrim(sprintf('%.3f', (float)$ak), '0'), '.') : '0.22',
         'runout' => $on($d, 'FILAMENT_RUNOUT_SENSOR'),
@@ -1545,6 +1580,20 @@ function marlin_apply_values_tier2_adv(array &$adv, array $v): array
     $keep = fn (string $k): ?string => $adv['defines'][$k]['value'] ?? null;
 
     $set('POWER_LOSS_RECOVERY', $keep('POWER_LOSS_RECOVERY'), ($v['power_loss'] ?? '0') === '1');
+
+    // Bed thermal-runaway tuning. These values apply after the bed has reached
+    // its target and control allowable deviation and timeout before shutdown.
+    $set('THERMAL_PROTECTION_BED_PERIOD',
+         (string)max(5, min(300, (int)($v['bed_protection_period'] ?? 40))), true);
+    $set('THERMAL_PROTECTION_BED_HYSTERESIS',
+         (string)max(1, min(20, (int)($v['bed_protection_hysteresis'] ?? 4))), true);
+
+    // Bed heating-watch tuning. This does not disable THERMAL_PROTECTION_BED;
+    // it only controls how long Marlin waits for the required temperature rise.
+    $set('WATCH_BED_TEMP_PERIOD',
+         (string)max(30, min(600, (int)($v['bed_watch_period'] ?? 60))), true);
+    $set('WATCH_BED_TEMP_INCREASE',
+         (string)max(2, min(10, (int)($v['bed_watch_increase'] ?? 2))), true);
 
     $la = ($v['lin_advance'] ?? '0') === '1';
     $set('LIN_ADVANCE', $keep('LIN_ADVANCE'), $la);
@@ -2862,6 +2911,22 @@ function boards_self_check(): array
                     $problems[] = "{$id}: MCU '{$mv['id']}' has no marlin_env";
                 }
             }
+
+            $sdConnections = (array)($b['marlin']['sd_connections'] ?? []);
+            $sdDefault = strtoupper(trim((string)($b['marlin']['sd_default_connection'] ?? '')));
+            if ($sdConnections === []) {
+                $problems[] = "{$id}: Marlin profile has no explicit sd_connections";
+            }
+            foreach ($sdConnections as $sdConnection) {
+                $sdConnection = strtoupper(trim((string)$sdConnection));
+                if (!in_array($sdConnection, ['ONBOARD', 'LCD'], true)) {
+                    $problems[] = "{$id}: unsupported SD connection '{$sdConnection}'";
+                }
+            }
+            $normalizedSd = array_map(static fn ($v) => strtoupper(trim((string)$v)), $sdConnections);
+            if ($sdDefault === '' || !in_array($sdDefault, $normalizedSd, true)) {
+                $problems[] = "{$id}: sd_default_connection is missing or not in sd_connections";
+            }
         }
 
         if (!empty($fs['klipper'])) {
@@ -3459,6 +3524,14 @@ function hf_validate_fields(array $fields, array $input): array
         }
 
         $raw = $input[$key] ?? null;
+
+        // Fields may declare a migration-safe default. This is especially
+        // important when a new field is added to an existing project: old
+        // saved rows should validate with the declared default instead of
+        // failing the build gate as "Required".
+        if (($raw === null || $raw === '') && array_key_exists('default', $f)) {
+            $raw = $f['default'];
+        }
 
         switch ($f['type']) {
             case 'text':

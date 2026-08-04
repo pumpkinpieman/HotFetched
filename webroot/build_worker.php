@@ -830,9 +830,12 @@ $primaryBaud = (int)($vals['serial_baud'] ?? 0);
 $secondaryBaud = (int)($vals['serial_baud_2'] ?? 0);
 
 if (($vals['sd_support'] ?? '0') === '1'
-    && ($vals['sd_card_connection'] ?? 'ONBOARD') === 'LCD'
-    && !$uiPresent) {
-    $conflicts[] = 'The display / EXP SD slot requires a Marlin-mode LCD connected through the EXP ribbon cables. Select the mainboard SD slot, or choose a Marlin-mode display.';
+    && ($vals['sd_card_connection'] ?? 'ONBOARD') === 'LCD') {
+    if (!$uiPresent) {
+        $conflicts[] = 'The native LCD SD route requires a compatible Marlin-mode display connected through EXP1/EXP2. ' . marlin_sd_tft_guidance($board);
+    } elseif ($screenSerialType === 'marlinui_tft') {
+        $conflicts[] = 'The BTT TFT35/TFT70 SD slot is controlled by TFT firmware and is not exposed to Marlin as a native LCD SD reader. ' . marlin_sd_tft_guidance($board);
+    }
 }
 
 if ($secondaryEnabled && $secondarySerial === $primarySerial) {
@@ -1188,6 +1191,8 @@ blog('Interface: SERIAL_PORT=' . $defValue($doc['defines']['SERIAL_PORT'] ?? nul
     . ', SERIAL_PORT_2=' . $defValue($doc['defines']['SERIAL_PORT_2'] ?? null)
     . ', BAUDRATE_2=' . $defValue($doc['defines']['BAUDRATE_2'] ?? null));
 blog('Display defines: ' . ($activeDisplays === [] ? 'none' : implode(', ', array_keys($activeDisplays))));
+blog('SD card: support=' . $defValue($doc['defines']['SDSUPPORT'] ?? null)
+    . ', connection=' . $defValue($docAdv['defines']['SDCARD_CONNECTION'] ?? null));
 blog('MMU: model=' . $mmuPick
     . ', port=' . $defValue($docAdv['defines']['MMU_SERIAL_PORT'] ?? null)
     . ', baud=' . $defValue($docAdv['defines']['MMU_BAUD'] ?? null));
@@ -1300,6 +1305,10 @@ $manifest = [
         'BAUDRATE' => $defValue($doc['defines']['BAUDRATE'] ?? null),
         'SERIAL_PORT_2' => $defValue($doc['defines']['SERIAL_PORT_2'] ?? null),
         'BAUDRATE_2' => $defValue($doc['defines']['BAUDRATE_2'] ?? null),
+    ],
+    'media' => [
+        'SDSUPPORT' => $defValue($doc['defines']['SDSUPPORT'] ?? null),
+        'SDCARD_CONNECTION' => $defValue($docAdv['defines']['SDCARD_CONNECTION'] ?? null),
     ],
     'artifact' => $artifactOk ? [
         'filename' => $fwName,

@@ -139,7 +139,12 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "ONBOARD",
+      "LCD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "klipper": {
     "reference_config": "generic-mks-rumba32-v1.0.cfg",

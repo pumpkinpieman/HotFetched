@@ -84,7 +84,11 @@
         "label": "Fixed / inductive probe"
       }
     ],
-    "flash_note": "Flash out/firmware.hex via avrdude over USB. Creality Melzi ships an Optiboot bootloader (env melzi_optiboot) - no SD flashing on this board."
+    "flash_note": "Flash out/firmware.hex via avrdude over USB. Creality Melzi ships an Optiboot bootloader (env melzi_optiboot) - no SD flashing on this board.",
+    "sd_connections": [
+      "ONBOARD"
+    ],
+    "sd_default_connection": "ONBOARD"
   },
   "klipper": {
     "reference_config": "generic-melzi.cfg",

@@ -138,7 +138,11 @@
           "USE_PROBE_FOR_Z_HOMING"
         ]
       }
-    ]
+    ],
+    "sd_connections": [
+      "LCD"
+    ],
+    "sd_default_connection": "LCD"
   },
   "klipper": {
     "reference_config": "generic-fysetc-f6.cfg",

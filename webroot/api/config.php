@@ -19,6 +19,18 @@ if ($isMultipart) {
 
 csrf_verify($body['csrf'] ?? null);
 
+// Never return an empty Apache 500 for configuration failures. Log the full
+// exception server-side and return enough detail to diagnose a local install.
+set_exception_handler(static function (Throwable $e): void {
+    error_log('[config] uncaught ' . get_class($e) . ': ' . $e->getMessage()
+        . ' in ' . $e->getFile() . ':' . $e->getLine());
+    json_out([
+        'ok' => false,
+        'error' => 'Configuration save crashed: ' . get_class($e) . ': ' . $e->getMessage(),
+        'where' => basename($e->getFile()) . ':' . $e->getLine(),
+    ], 500);
+});
+
 $action = (string)($body['action'] ?? '');
 
 /** Load project + board + parsed Configuration.h, or bail with a JSON error. */
@@ -75,6 +87,15 @@ function load_config_context(array $body): array
         json_out(['ok' => false, 'error' => 'Unable to read Configuration.h'], 500);
     }
     return [$p, $board, $doc, $confPath, $advPath];
+}
+
+/** Resolve the selected Marlin screen without depending on build_worker.php. */
+function config_selected_screen(array $board, string $screenId): array
+{
+    foreach (($board['marlin']['screens'] ?? []) as $screen) {
+        if ((string)($screen['id'] ?? '') === $screenId) return $screen;
+    }
+    return ['id' => 'none', 'label' => 'None / headless', 'type' => 'none'];
 }
 
 switch ($action) {
@@ -235,6 +256,17 @@ switch ($action) {
                               marlin_field_defs_mmu($board), marlin_field_defs_tier3($board),
                               marlin_field_defs_tier4($board), marlin_field_defs_extended($board));
         $input  = is_array($body['values'] ?? null) ? $body['values'] : [];
+
+        // Preserve the imported Marlin values when an older or cached browser
+        // form omits the newly-added bed-watch controls. Submitted values win.
+        $bedWatchCurrent = marlin_current_values_tier2($doc, $adv);
+        foreach (['bed_protection_period' => '40', 'bed_protection_hysteresis' => '4',
+                  'bed_watch_period' => '60', 'bed_watch_increase' => '2'] as $key => $fallback) {
+            if (!array_key_exists($key, $input) || trim((string)$input[$key]) === '') {
+                $input[$key] = (string)($bedWatchCurrent[$key] ?? $fallback);
+            }
+        }
+
         $input = linear_rail_prepare_values($input, $input);
         [$values, $errors] = hf_validate_fields($fields, $input);
 
@@ -247,12 +279,32 @@ switch ($action) {
             }
         }
 
+        foreach ([
+            'THERMAL_PROTECTION_BED_PERIOD' => 'bed_protection_period',
+            'THERMAL_PROTECTION_BED_HYSTERESIS' => 'bed_protection_hysteresis',
+            'WATCH_BED_TEMP_PERIOD' => 'bed_watch_period',
+            'WATCH_BED_TEMP_INCREASE' => 'bed_watch_increase',
+        ] as $requiredDefine => $fieldKey) {
+            if (!isset($adv['defines'][$requiredDefine])) {
+                $errors[$fieldKey] = 'This imported Marlin version does not expose the required bed thermal-protection setting: ' . $requiredDefine;
+                break;
+            }
+        }
+
         if (($values['sd_support'] ?? '0') === '1') {
             if (!isset($doc['defines']['SDSUPPORT'])) {
                 $errors['sd_support'] = 'This imported Marlin version does not expose SDSUPPORT in Configuration.h.';
             }
             if (!isset($adv['defines']['SDCARD_CONNECTION'])) {
                 $errors['sd_card_connection'] = 'This imported Marlin version does not expose SDCARD_CONNECTION in Configuration_adv.h.';
+            }
+        }
+
+        if (($values['sd_support'] ?? '0') === '1'
+            && ($values['sd_card_connection'] ?? 'ONBOARD') === 'LCD') {
+            $sdScreen = config_selected_screen($board, (string)($values['screen'] ?? 'none'));
+            if ((string)($sdScreen['type'] ?? 'none') === 'marlinui_tft') {
+                $errors['sd_card_connection'] = 'The BTT TFT35/TFT70 SD slot is controlled by TFT firmware and is not a native Marlin LCD SD reader. ' . marlin_sd_tft_guidance($board);
             }
         }
 
