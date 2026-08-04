@@ -39,12 +39,12 @@ RUN sed -ri 's!/var/www/html!/var/www/html/webroot!g' \
 COPY webroot/ /var/www/html/webroot/
 COPY tools/ /opt/hotfetched/tools/
 
-# Refuse to create an image with malformed PHP or board definitions. This checks
-# every MCU variant and every supported screen type, not only the active board.
-RUN find /var/www/html/webroot -name '*.php' -print0 | xargs -0 -n1 php -l \
-    && find /opt/hotfetched/tools -name '*.php' -print0 | xargs -0 -n1 php -l \
-    && php /opt/hotfetched/tools/validate_boards.php /var/www/html/webroot/boards \
-    && mkdir -p /var/www/html/private/projects \
+# Refuse to create an image with malformed PHP or board definitions.
+# Keep each gate in its own layer so CI identifies the exact failing check.
+RUN find /var/www/html/webroot -type f -name '*.php' -exec php -l {} \;
+RUN find /opt/hotfetched/tools -type f -name '*.php' -exec php -l {} \;
+RUN php /opt/hotfetched/tools/validate_boards.php /var/www/html/webroot/boards
+RUN mkdir -p /var/www/html/private/projects \
     && chown -R www-data:www-data /var/www/html /opt/hotfetched
 
 RUN { \

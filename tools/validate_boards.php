@@ -111,6 +111,48 @@ foreach ($files as $file) {
     }
 }
 
+
+// Validate explicit SD-card routing metadata for every Marlin-capable board.
+foreach ($files as $file) {
+    $name = basename($file);
+    try {
+        $board = json_decode((string)file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
+    } catch (Throwable $e) {
+        continue; // JSON errors were already recorded above.
+    }
+    if (!is_array($board) || !(bool)($board["firmware_support"]["marlin"] ?? true)) {
+        continue;
+    }
+
+    $connections = $board["marlin"]["sd_connections"] ?? null;
+    if (!is_array($connections) || $connections === []) {
+        $errors[] = "{$name}: marlin.sd_connections must explicitly list ONBOARD and/or LCD";
+        continue;
+    }
+
+    $normalized = [];
+    foreach ($connections as $idx => $connection) {
+        if (!is_string($connection) || trim($connection) === "") {
+            $errors[] = "{$name}: marlin.sd_connections[{$idx}] must be a non-empty string";
+            continue;
+        }
+        $connection = strtoupper(trim($connection));
+        if (!in_array($connection, ["ONBOARD", "LCD"], true)) {
+            $errors[] = "{$name}: unsupported SD connection {$connection}";
+            continue;
+        }
+        if (isset($normalized[$connection])) {
+            $errors[] = "{$name}: duplicate SD connection {$connection}";
+        }
+        $normalized[$connection] = true;
+    }
+
+    $default = strtoupper(trim((string)($board["marlin"]["sd_default_connection"] ?? "")));
+    if ($default === "" || !isset($normalized[$default])) {
+        $errors[] = "{$name}: marlin.sd_default_connection must match one declared SD connection";
+    }
+}
+
 if ($errors !== []) {
     foreach ($errors as $error) {
         fwrite(STDERR, $error . PHP_EOL);
