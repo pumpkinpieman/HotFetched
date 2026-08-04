@@ -5,6 +5,8 @@ motherboard, import Marlin or Klipper source, edit the configuration through a
 web UI, and run confidence-gated builds where **100% means the firmware
 actually compiled**.
 
+NOW WITH MORE PASTA SAUCE!
+
 ## Features
 
 **Marlin** — full configuration editor over `Configuration.h` and
