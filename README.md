@@ -25,6 +25,7 @@ reference config with your geometry, speeds, and TMC currents applied.
 host G-code, browser piezo preview, RTTTL/MIDI/audio melody import, format
 export (.mid/.rtttl/.txt), and a searchable 11,000-melody library
 (ldrolez/free-midi-chords, MIT).
+Do you know, the muffin man?
 
 **Boot images** — any PNG/JPEG dithered to a 128x64 1-bit `_Bootscreen.h`
 with live preview.
