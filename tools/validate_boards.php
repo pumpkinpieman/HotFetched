@@ -6,6 +6,7 @@ $allowedScreenTypes = ['none', 'char20x4', 'mono128x64', 'marlinui_tft', 'serial
 $errors = [];
 $boardIds = [];
 $files = glob(rtrim($boardsDir, '/') . '/*.json') ?: [];
+$marlinBoardCount = 0;
 
 if ($files === []) {
     fwrite(STDERR, "No board JSON files found in {$boardsDir}\n");
@@ -26,10 +27,17 @@ foreach ($files as $file) {
         continue;
     }
 
-    foreach (['id', 'name', 'mcu_variants', 'marlin'] as $key) {
+    $supportsMarlin = (bool)($board['firmware_support']['marlin'] ?? true);
+
+    // Every board needs generic identity and MCU metadata. Only Marlin-capable
+    // boards are required to provide a marlin section.
+    foreach (['id', 'name', 'mcu_variants'] as $key) {
         if (!array_key_exists($key, $board) || $board[$key] === '' || $board[$key] === []) {
             $errors[] = "{$name}: missing required key {$key}";
         }
+    }
+    if ($supportsMarlin && (!array_key_exists('marlin', $board) || !is_array($board['marlin']) || $board['marlin'] === [])) {
+        $errors[] = "{$name}: missing required key marlin";
     }
 
     $id = (string)($board['id'] ?? '');
@@ -55,7 +63,7 @@ foreach ($files as $file) {
             $errors[] = "{$name}: duplicate MCU variant id {$vid}";
         }
         $variantIds[$vid] = true;
-        if (($board['firmware_support']['marlin'] ?? true) && $env === '') {
+        if ($supportsMarlin && $env === '') {
             $errors[] = "{$name}: MCU variant {$vid} is missing marlin_env";
         }
         if (isset($variant['marlin_env_aliases'])) {
@@ -71,6 +79,13 @@ foreach ($files as $file) {
         }
     }
 
+    // Klipper-only / RRF-only boards intentionally have no Marlin screen or SD
+    // configuration. Their generic metadata has already been validated above.
+    if (!$supportsMarlin) {
+        continue;
+    }
+
+    $marlinBoardCount++;
     $screens = $board['marlin']['screens'] ?? [];
     if (!is_array($screens) || $screens === []) {
         $errors[] = "{$name}: marlin.screens must contain at least the none option";
@@ -109,22 +124,9 @@ foreach ($files as $file) {
     if (!$hasNone) {
         $errors[] = "{$name}: marlin.screens must include id=none,type=none";
     }
-}
 
-
-// Validate explicit SD-card routing metadata for every Marlin-capable board.
-foreach ($files as $file) {
-    $name = basename($file);
-    try {
-        $board = json_decode((string)file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
-    } catch (Throwable $e) {
-        continue; // JSON errors were already recorded above.
-    }
-    if (!is_array($board) || !(bool)($board["firmware_support"]["marlin"] ?? true)) {
-        continue;
-    }
-
-    $connections = $board["marlin"]["sd_connections"] ?? null;
+    // Validate explicit SD-card routing metadata only for Marlin-capable boards.
+    $connections = $board['marlin']['sd_connections'] ?? null;
     if (!is_array($connections) || $connections === []) {
         $errors[] = "{$name}: marlin.sd_connections must explicitly list ONBOARD and/or LCD";
         continue;
@@ -132,12 +134,12 @@ foreach ($files as $file) {
 
     $normalized = [];
     foreach ($connections as $idx => $connection) {
-        if (!is_string($connection) || trim($connection) === "") {
+        if (!is_string($connection) || trim($connection) === '') {
             $errors[] = "{$name}: marlin.sd_connections[{$idx}] must be a non-empty string";
             continue;
         }
         $connection = strtoupper(trim($connection));
-        if (!in_array($connection, ["ONBOARD", "LCD"], true)) {
+        if (!in_array($connection, ['ONBOARD', 'LCD'], true)) {
             $errors[] = "{$name}: unsupported SD connection {$connection}";
             continue;
         }
@@ -147,8 +149,8 @@ foreach ($files as $file) {
         $normalized[$connection] = true;
     }
 
-    $default = strtoupper(trim((string)($board["marlin"]["sd_default_connection"] ?? "")));
-    if ($default === "" || !isset($normalized[$default])) {
+    $default = strtoupper(trim((string)($board['marlin']['sd_default_connection'] ?? '')));
+    if ($default === '' || !isset($normalized[$default])) {
         $errors[] = "{$name}: marlin.sd_default_connection must match one declared SD connection";
     }
 }
@@ -157,8 +159,16 @@ if ($errors !== []) {
     foreach ($errors as $error) {
         fwrite(STDERR, $error . PHP_EOL);
     }
-    fwrite(STDERR, sprintf("Board validation failed: %d issue(s) across %d file(s).\n", count($errors), count($files)));
+    fwrite(STDERR, sprintf(
+        "Board validation failed: %d issue(s) across %d file(s).\n",
+        count($errors),
+        count($files)
+    ));
     exit(1);
 }
 
-echo sprintf("Board validation passed: %d board profiles.\n", count($files));
+echo sprintf(
+    "Board validation passed: %d board profiles (%d Marlin-capable).\n",
+    count($files),
+    $marlinBoardCount
+);
